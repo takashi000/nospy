@@ -459,6 +459,3 @@ class Nips(
 ):
     def __init__(self):
         super(Nips, self).__init__()
-
-if __name__ == "__main__":
-    nip = Nips()
