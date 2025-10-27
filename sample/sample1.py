@@ -4,7 +4,7 @@ from nospy import Nostr
 
 """
 kind1でメッセージを投稿する例
-<your secret key> := npub or hex
+<your secret key> := nsec or hex
 <relay url> := wss://...
 """
 

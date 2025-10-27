@@ -4,7 +4,7 @@ from nospy import Nostr
 
 """
 NIP04でメッセージを暗号化したメッセージを作成する例
-<your secret key> := npub or hex
+<your secret key> := nsec or hex
 <relay url> := wss://...
 """
 
