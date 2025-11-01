@@ -1,3 +1,4 @@
+import json
 from .event import Event
 from .kinds import Kinds
 
@@ -15,7 +16,7 @@ class Filter(Event, Kinds):
             "search":""
         }
 
-        self.subscribe_filters:dict = {}
+        self.subscribe_filters:list[dict] = []
 
     def matchFilter(self):
         if self.nostr_filter.get("ids") and self.id not in self.nostr_filter.get("ids"):
@@ -96,9 +97,19 @@ class Filter(Event, Kinds):
         if isinstance(search, str):
             filter_dict.update(search=search)
         
-        self.subscribe_filters.update(filter_dict)
+        self.subscribe_filters.append(filter_dict)
 
         return filter_dict
 
+    def pullFilters(self) -> list[dict]:
+        return self.subscribe_filters
+
+    def strFilters(self) -> str:
+        return "".join([json.dumps(f)+',' for f in self.subscribe_filters]).rstrip(',')
+    
+    def deleteFilter(self, index:int):
+        if index >= 0 and index < len(self.subscribe_filters):
+            del self.subscribe_filters[index]
+
     def clearFilters(self):
-        self.subscribe_filters = {}
+        self.subscribe_filters.clear()

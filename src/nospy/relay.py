@@ -94,11 +94,11 @@ class Relay(Filter, Nips):
     async def close(self, ids:list[str]=None) -> None:
         if ids:
             for id in ids:
-                await self.send(f'["CLOSE","{id}"]')
+                await self.send(self.closeMessage(id=id))
             self.subscribe_ids = list(filter(lambda x: x not in ids, self.subscribe_ids))
         else:
             for id in self.subscribe_ids:
-                await self.send(f'["CLOSE","{id}"]')
+                await self.send(self.closeMessage(id=id))
             self.subscribe_ids = []
 
         if self.subscribe_ids == []:
@@ -126,13 +126,13 @@ class Relay(Filter, Nips):
             "id": self.id,
             "sig": self.sig
         }
-        await self.send(f'["AUTH",{json.dumps(event)}]')
+        await self.send(self.authMessage(event=event))
     
     async def count(self, id:str=""):
-        await self.send(f'["COUNT","{id}",{json.dumps(self.subscribe_filters)}]')
+        await self.send(self.countMessage(id=id))
 
     async def fire(self, id:str="") -> None:
-        await self.send(f'["REQ","{id}",{json.dumps(self.subscribe_filters)}]')
+        await self.send(self.reqMessage(id=id))
 
     async def publish(self) -> None:
         event = {
@@ -144,7 +144,7 @@ class Relay(Filter, Nips):
             "id": self.id,
             "sig": self.sig
         }
-        await self.send(f'["EVENT",{json.dumps(event)}]')
+        await self.send(self.eventMessage(event=event))
 
     async def subscribe(self, id:str="") -> None:
         self.subscribe_ids.append(id)
@@ -170,6 +170,26 @@ class Relay(Filter, Nips):
                     print(f"from server unknown{msg.data}")
                     break
 
+    def eventMessage(self, event:dict) -> str:
+        return f'["EVENT",{json.dumps(event)}]'
+    
+    def requestMessage(self, id:str="") -> str:
+        return f'["REQ","{id}",{json.dumps(self.subscribe_filters)}]'
+    
+    def closeMessage(self, id:str="") -> str:
+        return f'["CLOSE","{id}"]'
+    
+    def authMessage(self, event:dict) -> str:
+        return f'["AUTH",{json.dumps(event)}]'
+    
+    def countMessage(self, id:str="") -> str:
+        subscribe_filters = self.strFilters()
+        return f'["COUNT","{id}",{subscribe_filters}]' if subscribe_filters != "" else f'["COUNT","{id}",{{}}]'
+    
+    def reqMessage(self, id:str="") -> str:
+        subscribe_filters = self.strFilters()
+        return f'["REQ","{id}",{subscribe_filters}]' if subscribe_filters != "" else f'["REQ","{id}",{{}}]'
+
     def choice(self, subscribe_id:list[str]=None, msg_type:str="", num=-1):
         # subscribe_id: None すべてのIDを取得
         # msg_type: EVENT, EOSE, NOTICE, OK, COUNT, AUTH
@@ -182,3 +202,4 @@ class Relay(Filter, Nips):
             choiced_data = list(filter(lambda x: x[0] == msg_type, self.receive_data))
         
         return choiced_data[0:num] if num >= 0 else choiced_data[0:]
+    
