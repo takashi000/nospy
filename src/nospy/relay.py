@@ -1,13 +1,29 @@
 import asyncio
 import json
-from aiohttp import ClientSession, ClientTimeout, ClientWebSocketResponse, ClientWSTimeout, WSMsgType
+import ssl
+import uuid
+from aiohttp import ClientSession, ClientTimeout, ClientWebSocketResponse, ClientWSTimeout, WSMsgType, web
 from aiohttp.client_exceptions import ClientConnectionResetError
 
 from .filter import Filter
+from .message import Message
 from .nips import Nips
 
-class Relay(Filter, Nips):
-    def __init__(self, url:str="", ping:bool=False, reconnect_on:bool=True, reconnect_max:int=3, timeout:float=1.5):
+class Relay(Filter, Message, Nips):
+    def __init__(
+            self, url:str="",
+            ping:bool=False,
+            reconnect_on:bool=True,
+            reconnect_max:int=3,
+            timeout:float=1.5,
+            server_host:str="0.0.0.0",
+            server_port:int=8080,
+            server_route:str="/",
+            server_ssl_on:bool=False,
+            ssl_certfile:str="",
+            ssl_keyfile:str="",
+            client_ssl_on:bool=True,
+        ):
         super(Relay, self).__init__()
 
         self.session:ClientSession = None
@@ -21,6 +37,78 @@ class Relay(Filter, Nips):
         self.timeout_receive = timeout
         self.subscribe_ids:list[str] = []
         self.receive_data:list[list] = []
+        self.client_ssl_on:bool = client_ssl_on
+
+        self.server_app:web.Application = None
+        self.server_runner:web.AppRunner = None
+        self.server_host:str = server_host
+        self.server_port:int = server_port
+        self.server_route:str = server_route
+        self.server_ssl_on:bool = server_ssl_on
+        self.ssl_certfile:str = ssl_certfile
+        self.ssl_keyfile:str = ssl_keyfile
+        self.server_buffer:list[dict] = []
+
+    async def server_start(self) -> None:
+        ssl_context = None
+        if self.server_ssl_on:
+            ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+            if self.ssl_certfile != "" and self.ssl_keyfile != "":
+                ssl_context.load_cert_chain(self.ssl_certfile, self.ssl_keyfile)
+
+        self.server_app = web.Application()
+        self.server_app.router.add_get(self.server_route, self.relay_handler)
+
+        self.server_runner = web.AppRunner(self.server_app)
+        await self.server_runner.setup()
+        site = web.TCPSite(self.server_runner, host=self.server_host, port=self.server_port, ssl_context=ssl_context)
+        await site.start()
+
+    async def server_send(self, ws:web.WebSocketResponse, message:str="") -> None:
+        try:
+            await ws.send_str(message)
+        except Exception as e:
+            print(e)
+
+    async def server_dequeue(self) -> dict|None:
+        if len(self.server_buffer) > 0:
+            return self.server_buffer.pop(0)
+        return None
+
+    async def relay_handler(self, request) -> web.WebSocketResponse:
+        message:list = []
+        uuid_id = str(uuid.uuid4())
+        ws = web.WebSocketResponse()
+        
+        await ws.prepare(request)
+
+        try:
+            async for data in ws:
+                # メッセージの受信
+                try:
+                    match(data.type):
+                        case WSMsgType.TEXT:
+                            message = json.loads(data.data)
+                        case WSMsgType.CLOSE|WSMsgType.CLOSED|WSMsgType.ERROR:
+                            break
+                        case _:
+                            print(f"from client unknown:{data.data}")
+                except json.JSONDecodeError as e:
+                    print(e)
+                    continue
+                # 受信したメッセージをバッファに追加
+                self.server_buffer.append({
+                    "uuid": uuid_id,
+                    "ws": ws,
+                    "message": message
+                })
+        except Exception as e:
+            print(e)
+
+        ws.close()
+        print("websocket connection closed")
+
+        return ws
 
     async def connect(self, url:str="") -> None:
         ctimeout = ClientTimeout(
@@ -32,7 +120,7 @@ class Relay(Filter, Nips):
         wstimeout = ClientWSTimeout(ws_receive=self.timeout_receive, ws_close=None)
 
         self.session =  ClientSession(timeout=ctimeout)
-        self.websocket = await self.session.ws_connect(url=url, timeout=wstimeout)
+        self.websocket = await self.session.ws_connect(url=url, timeout=wstimeout, ssl=self.client_ssl_on)
         self.connected = True
 
         if self.enableping:
@@ -50,7 +138,7 @@ class Relay(Filter, Nips):
             
             await asyncio.sleep(5)
 
-            await self.connect(url=url)
+            await self.connect(url)
             self.reconnect_count += 1
         else:
             raise ValueError(error)
@@ -94,11 +182,11 @@ class Relay(Filter, Nips):
     async def close(self, ids:list[str]=None) -> None:
         if ids:
             for id in ids:
-                await self.send(self.closeMessage(id=id))
+                await self.send(self.closeMessage(id))
             self.subscribe_ids = list(filter(lambda x: x not in ids, self.subscribe_ids))
         else:
             for id in self.subscribe_ids:
-                await self.send(self.closeMessage(id=id))
+                await self.send(self.closeMessage(id))
             self.subscribe_ids = []
 
         if self.subscribe_ids == []:
@@ -126,13 +214,13 @@ class Relay(Filter, Nips):
             "id": self.id,
             "sig": self.sig
         }
-        await self.send(self.authMessage(event=event))
+        await self.send(self.authMessage(event))
     
     async def count(self, id:str=""):
-        await self.send(self.countMessage(id=id))
+        await self.send(self.countMessage(id))
 
     async def fire(self, id:str="") -> None:
-        await self.send(self.reqMessage(id=id))
+        await self.send(self.reqMessage(id))
 
     async def publish(self) -> None:
         event = {
@@ -144,11 +232,11 @@ class Relay(Filter, Nips):
             "id": self.id,
             "sig": self.sig
         }
-        await self.send(self.eventMessage(event=event))
+        await self.send(self.eventMessage(event))
 
     async def subscribe(self, id:str="") -> None:
         self.subscribe_ids.append(id)
-        await self.fire(id=id)
+        await self.fire(id)
 
     async def pingpong(self) -> None:
         await self.send("ping")
@@ -169,26 +257,6 @@ class Relay(Filter, Nips):
                 case _:
                     print(f"from server unknown{msg.data}")
                     break
-
-    def eventMessage(self, event:dict) -> str:
-        return f'["EVENT",{json.dumps(event)}]'
-    
-    def requestMessage(self, id:str="") -> str:
-        return f'["REQ","{id}",{json.dumps(self.subscribe_filters)}]'
-    
-    def closeMessage(self, id:str="") -> str:
-        return f'["CLOSE","{id}"]'
-    
-    def authMessage(self, event:dict) -> str:
-        return f'["AUTH",{json.dumps(event)}]'
-    
-    def countMessage(self, id:str="") -> str:
-        subscribe_filters = self.strFilters()
-        return f'["COUNT","{id}",{subscribe_filters}]' if subscribe_filters != "" else f'["COUNT","{id}",{{}}]'
-    
-    def reqMessage(self, id:str="") -> str:
-        subscribe_filters = self.strFilters()
-        return f'["REQ","{id}",{subscribe_filters}]' if subscribe_filters != "" else f'["REQ","{id}",{{}}]'
 
     def choice(self, subscribe_id:list[str]=None, msg_type:str="", num=-1):
         # subscribe_id: None すべてのIDを取得

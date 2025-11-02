@@ -18,7 +18,8 @@ class Filter(Event, Kinds):
 
         self.subscribe_filters:list[dict] = []
 
-    def matchFilter(self):
+    def matchFilter(self, nostr_filter:dict) -> bool:
+        self.nostr_filter = nostr_filter
         if self.nostr_filter.get("ids") and self.id not in self.nostr_filter.get("ids"):
             return False
             
@@ -42,7 +43,8 @@ class Filter(Event, Kinds):
         
         return True
     
-    def getFilterLimit(self) -> int|float:
+    def getFilterLimit(self, nostr_filter:dict) -> int|float:
+        self.nostr_filter = nostr_filter
         if self.nostr_filter.get("ids") and len(self.nostr_filter.get("ids")) == 0:
             return 0
         

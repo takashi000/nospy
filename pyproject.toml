@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nospy"
-version = "0.0.2"
+version = "0.0.3"
 description = "Pythonで作ったNostr用ライブラリです。"
 requires-python = ">=3.12"
 authors = [{ name = "Tanaka Takashi" }]
