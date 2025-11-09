@@ -350,6 +350,7 @@ class Nip19:
 class Nip42:
     def __init__(self):
         super(Nip42, self).__init__()
+        self.challenge_nip42:str = ""
 
     def makeAuthEvent(self, relayURL:str="", kind:int=0) -> dict:
         return {
@@ -357,13 +358,14 @@ class Nip42:
             'created_at': int(time.time()),
             'tags':[
                 ['relay', relayURL],
-                ['challenge', self.getChallenge()]
+                ['challenge', self.challenge_nip42]
             ],
             'content':"",
         }
     
     def getChallenge(self, event:list=[]) -> str:
-        return  event[1]  if event[0] == "AUTH" else ""
+        self.challenge_nip42 = event[1]  if event[0] == "AUTH" else ""
+        return self.challenge_nip42
 
 class Nip44(Bip0340):
     def __init__(self):
