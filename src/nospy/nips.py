@@ -7,6 +7,7 @@ from math import floor, log2
 import bech32
 import hashlib
 import hmac
+import json
 import secrets
 import struct
 import time
@@ -114,7 +115,66 @@ class Nip06(Bip0032, Bip0039):
 
     def validateWords(self, words:str, lang:str="english"):
         return self.validateMnemonic(words, lang)
+
+class Nip13:
+    def __init__(self):
+        super(Nip13, self).__init__()
+    
+    def getPow(self, hex:str) -> int|None:
+        try:
+            id:bytes = bytes.fromhex(hex)
+        except:
+            return None
+
+        return tuple((byte >> (7 - i)) & 1 for byte in id for i in range(8)).index(1, 0)
+    
+    def minePow(self, event:dict, difficulty:int) -> dict|None:
+        count = 0
+        tag = ['nonce', f'{count}', f'{difficulty}']
+        keys = ['pubkey', 'created_at', 'kind', 'tags', 'content']
+
+        if not all([True if key in event.keys() else False for key in keys]): return None
+        if not isinstance(event['tags'], list): return None
+        unsignedevent:dict = {key: value for key, value in event.items() if key in keys}
+
+        unsignedevent['tags'].append(tag)
         
+        while True:
+            now = int(time.time())
+            if now != unsignedevent['created_at']:
+                count = 0
+                unsignedevent['created_at'] = now
+            
+            count += 1
+            
+            unsignedevent['tags'][-1][1] = f"{count}"
+            unsignedevent['id'] = self.fastEventHash(unsignedevent)
+
+            try:
+                if self.getPow(unsignedevent['id']) >= difficulty: break
+            except:
+                return None
+        
+        return unsignedevent
+
+    def fastEventHash(self, event:dict) -> str:
+        try:
+            return hashlib.sha256(
+                json.dumps(
+                    [0, 
+                    event['pubkey'], 
+                    event['created_at'], 
+                    event['kind'], 
+                    event['tags'], 
+                    event['content']
+                    ],
+                    ensure_ascii=False,
+                    separators=(',', ':')
+                ).encode('utf-8')
+            ).hexdigest()
+        except:
+            return ""
+
 class Nip19:
     def __init__(self):
         super(Nip19, self).__init__()
@@ -502,6 +562,7 @@ class Nip44(Bip0340):
 class Nips(
     Nip04,
     Nip06,
+    Nip13,
     Nip19,
     Nip42,
     Nip44,

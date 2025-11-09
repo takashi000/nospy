@@ -3,7 +3,6 @@ import json
 import ssl
 import uuid
 from aiohttp import ClientSession, ClientTimeout, ClientWebSocketResponse, ClientWSTimeout, WSMsgType, web
-from aiohttp.client_exceptions import ClientConnectionResetError
 
 from .filter import Filter
 from .message import Message
@@ -125,8 +124,9 @@ class Relay(Filter, Message, Nips):
 
         if self.enableping:
             await self.pingpong()
+            self.enableping = False
 
-    async def reconnect(self, url:str="", error:ClientConnectionResetError=None) -> None:
+    async def reconnect(self, url:str="") -> None:
         if self.reconnect_on:
             self.connected = False
             
@@ -138,44 +138,54 @@ class Relay(Filter, Message, Nips):
             
             await asyncio.sleep(5)
 
+            self.enableping = True
             await self.connect(url)
             self.reconnect_count += 1
         else:
-            raise ValueError(error)
+            raise ValueError("Not Connected")
 
     async def send(self, message:str="") -> None:
-        if self.reconnect_count > self.reconnect_max:
-            raise ValueError("Max try reconnect")
         try:
-            await self.websocket.send_str(message)
+            if self.reconnect_count > self.reconnect_max:
+                raise ValueError("Max try reconnect")
+            async for msg in self.websocket:
+                match(msg.type):
+                    case WSMsgType.TEXT:
+                        await self.websocket.send_str(message)
+                    case WSMsgType.CLOSE:
+                        print(f"close:{msg.data}")
+                    case WSMsgType.CLOSED:
+                        print(f"closed:{msg.data}")
+                    case WSMsgType.ERROR:
+                        print(f"error:{msg.data}")
+                    case _:
+                        print(f"unknown:{msg.data}")
+                break
             self.reconnect_count = 0
-        except ClientConnectionResetError as e:
-            await self.reconnect(self.url, e)
+        except TimeoutError:
+            await self.reconnect(self.url)
             await self.send(message)
         except Exception as e:
             raise ValueError(e)
-    
+
     async def receive(self) -> list[dict]:
-        if self.reconnect_count > self.reconnect_max:
-            raise ValueError("Max try reconnect")
         try:
-            async for data in self.websocket:
-                match(data.type):
+            async for msg in self.websocket:
+                match(msg.type):
                     case WSMsgType.TEXT:
-                        self.receive_data.append(json.loads(data.data))
+                        self.receive_data.append(json.loads(msg.data))
+                    case WSMsgType.CLOSE:
+                        print(f"close:{msg.data}")
+                    case WSMsgType.CLOSED:
+                        print(f"closed:{msg.data}")
                     case WSMsgType.ERROR:
-                        print(f"error:{data.data}")
+                        print(f"error:{msg.data}")
                     case _:
-                        print(f"unknown:{data.data}")
-                self.reconnect_count = 0
+                        print(f"unknown:{msg.data}")
         except TimeoutError:
-            pass
-        except ClientConnectionResetError as e:
-            await self.reconnect(self.url, e)
-            await self.receive
+            await self.reconnect(self.url)
         except Exception as e:
-            print(e)
-            pass
+            raise ValueError(e)
 
         return self.receive_data
      
@@ -239,24 +249,7 @@ class Relay(Filter, Message, Nips):
         await self.fire(id)
 
     async def pingpong(self) -> None:
-        await self.send("ping")
-        async for msg in self.websocket:
-            match(msg.type):
-                case WSMsgType.TEXT:
-                    print(f"from server text{msg.data}")
-                    break
-                case WSMsgType.PONG:
-                    print(f"from server pong{msg.data}")
-                    break
-                case WSMsgType.CLOSED:
-                    print(f"from server closed{msg.data}")
-                    break
-                case WSMsgType.ERROR:
-                    print(f"from server error{msg.data}")
-                    break
-                case _:
-                    print(f"from server unknown{msg.data}")
-                    break
+        await self.websocket.send_str("PING")
 
     def choice(self, subscribe_id:list[str]=None, msg_type:str="", num=-1):
         # subscribe_id: None すべてのIDを取得

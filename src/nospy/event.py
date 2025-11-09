@@ -105,16 +105,17 @@ class Event(Bip0340):
             tags:list[list[str]]=None,
             content:str="",
             created_at:int=None,
+            finalize:int=True,
             verify:bool=False,
             validate:bool=False,
         ) -> dict:
         self.kind = kind if kind else 1
-        self.tags = tags if tags else [[""]]
+        self.tags = tags if tags else []
         self.content = content if content else ""
         self.created_at = created_at if created_at else int(time.time())
         
-        event = self.finalizeEvent()
-
+        event = self.finalizeEvent() if finalize else self.unsignedEvent()
+        
         if verify:
             if not self.verifyEvent():
                 raise ValueError("invalid Event: verifyEvent Error")
