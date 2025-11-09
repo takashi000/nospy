@@ -1,6 +1,5 @@
 import secrets
 
-from .bip0340 import pubkey_gen
 from .relay import Relay
 
 class Nostr(Relay):
@@ -38,7 +37,7 @@ class Nostr(Relay):
         )
 
         self.skey = self.generateSecretKey(skey)
-        self.pubkey = self.getPublicKey(self.skey)
+        self.pubkey = self.generatePublicKey(self.skey)
         self.url = url
         self.server_on = server_on
 
@@ -50,9 +49,9 @@ class Nostr(Relay):
                     sk = bytes.fromhex(sk)
                 except:
                     sk = None
-        return secrets.token_bytes(32) if sk is None else sk
+        return self.randomSecretKey() if sk is None else sk
     
-    def getPublicKey(self, sk:bytes|str = None) -> str:
+    def generatePublicKey(self, sk:bytes|str = None) -> str:
         if type(sk) is str:
             sk = self.bech32_decode(sk)[1]
             if not sk:
@@ -60,7 +59,7 @@ class Nostr(Relay):
                     sk = bytes.fromhex(sk)
                 except:
                     sk = None
-        return pubkey_gen(sk if sk is not None else self.skey).hex()
+        return self.getPublicKey(sk if sk is not None else self.skey)[1:].hex()
 
     async def __aenter__(self):
         if self.server_on:

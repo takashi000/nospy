@@ -2,9 +2,10 @@ import hashlib
 import re
 import json
 import time
-from .bip0340 import schnorr_sign, schnorr_verify
 
-class Event:
+from .bip0340 import Bip0340
+
+class Event(Bip0340):
     def __init__(self):
         super(Event, self).__init__()
 
@@ -59,9 +60,9 @@ class Event:
         return hashlib.sha256(self.serializeEvent().encode('utf-8')).hexdigest()
     
     def finalizeEvent(self) -> dict:
-        self.pubkey = self.getPublicKey(self.skey)
+        self.pubkey = self.generatePublicKey(self.skey) # defined nospy.py
         self.id = self.getEventHash()
-        self.sig = schnorr_sign(bytes.fromhex(self.getEventHash()), self.skey).hex()
+        self.sig = self.signSchnorr(bytes.fromhex(self.getEventHash()), self.skey).hex()
         self.verifiedSymbol = True
         return self.eventTemplate()
     
@@ -72,7 +73,7 @@ class Event:
             self.verifiedSymbol = False
             return False
         try:
-            valid = schnorr_verify(bytes.fromhex(hash), bytes.fromhex(self.pubkey), bytes.fromhex(self.sig))
+            valid = self.verifySchnorr(bytes.fromhex(hash), bytes.fromhex(self.pubkey), bytes.fromhex(self.sig))
             self.verifiedSymbol = valid
             return valid
         except:

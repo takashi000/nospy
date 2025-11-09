@@ -1,4 +1,3 @@
-from ecdsa import ECDH, SECP256k1
 from Crypto.Cipher import AES, ChaCha20
 from Crypto.Protocol.KDF import HKDF
 from Crypto.Hash import SHA256
@@ -12,13 +11,17 @@ import secrets
 import struct
 import time
 
-class Nip04:
+from .bip0032 import Bip0032
+from .bip0039 import Bip0039
+from .bip0340 import Bip0340
+
+class Nip04(Bip0340):
     def __init__(self):
         super(Nip04, self).__init__()
 
     def aes_encrypt(self, seckey:bytes, pubkey:str, text:str) -> str:
         privkey = seckey
-        key = self.getSharedSecret(privkey, pubkey)
+        key = self.getSharedSecret(privkey, bytes.fromhex('02' + pubkey))
         normkey = self.getNormalizedX(key)
 
         iv = secrets.token_bytes(16)
@@ -34,7 +37,7 @@ class Nip04:
     def aes_decrypt(self, seckey:bytes, pubkey:str, data:str) -> str:
         privkey = seckey
         (ctb64, ivb64) = data.split('?iv=')
-        key = self.getSharedSecret(privkey, pubkey)
+        key = self.getSharedSecret(privkey, bytes.fromhex('02' + pubkey))
         normkey = self.getNormalizedX(key)
 
         iv = b64decode(ivb64)
@@ -45,21 +48,73 @@ class Nip04:
         return plaintext.decode('utf-8')
 
     def getNormalizedX(self, key:bytes) -> bytes:
-        return key[0:33]
-    
-    def getSharedSecret(self, seckey:bytes, pubkey:str) -> bytes:
-        privkey = seckey
-        publickey = bytes.fromhex('02' + pubkey)
+        return key[1:33]
 
-        ecdh = ECDH(curve=SECP256k1)
-        ecdh.load_private_key_bytes(private_key=privkey)
+class Nip06(Bip0032, Bip0039):
+    def __init__(self):
+        super(Nip06, self).__init__()
+        self.derivation_path = "m/44'/1237'"
+
+    def privateKeyFromSeedWords(self, mnemonic:str, passphrase:str="", accountIndex:int = 0, lang:str="english") -> bytes|None:
+        root = self.fromMasterseed(self.mnemonicToSeed(mnemonic, passphrase, lang))
+        if root is None: return None
         
-        ecdh.load_received_public_key_bytes(public_key_str=publickey)
+        privateKey = root.derive(f"{self.derivation_path}/{accountIndex}'/0/0").getprivateKey()
+        if privateKey is None: return None
 
-        shared = ecdh.generate_sharedsecret_bytes()
+        return privateKey
+
+    def accountFromSeedWords(self, mnemonic:str, passphrase:str="", accountIndex:int = 0, lang:str="english") -> tuple[bytes, str]|tuple[None, None]:
+        root = self.fromMasterseed(self.mnemonicToSeed(mnemonic, passphrase, lang))
+        if root is None: return (None, None)
         
-        return shared
+        seed = root.derive(f"{self.derivation_path}/{accountIndex}'/0/0")
+        if seed is None: return (None, None)
 
+        try:
+            publicKey = seed.getpublicKey()[1:].hex()
+        except:
+            return (None, None)
+        privateKey = seed.getprivateKey()
+        if privateKey is None or publicKey is None: return (None, None)
+
+        return (privateKey, publicKey)
+
+    def extendedKeysFromSeedWords(self, mnemonic:str, passphrase:str="", accountIndex:int = 0, lang:str="english") -> tuple[str, str]|tuple[None, None]:
+        root = self.fromMasterseed(self.mnemonicToSeed(mnemonic, passphrase, lang))
+        if root is None: return None
+
+        seed = root.derive(f"{self.derivation_path}/{accountIndex}'")
+        if seed is None: return None
+
+        privateExtendedKey = seed.getprivateExtendedKey()
+        publicExtendedKey = seed.getpublicExtendedKey()
+
+        return (privateExtendedKey, publicExtendedKey)
+
+    def accountFromExtendedKey(self, base58Key:str, accountIndex = 0, lang:str="english") -> tuple[bytes, str]|tuple[None, None]:
+        extendedKey = self.fromExtendedKey(base58Key)
+        if extendedKey is None: return (None, None)
+
+        version = base58Key[0:4]
+        
+        child = extendedKey.deriveChild(0).deriveChild(accountIndex)
+        if child is None: return (None, None)
+
+        try:
+            publicKey = child.getpublicKey()[1:].hex()
+        except:
+            publicKey = None
+        privateKey = child.getprivateKey() if version == 'xprv' else None
+
+        return (privateKey, publicKey)
+
+    def generateSeedWords(self, lang:str="english"):
+        return self.generateMnemonic(lang)
+
+    def validateWords(self, words:str, lang:str="english"):
+        return self.validateMnemonic(words, lang)
+        
 class Nip19:
     def __init__(self):
         super(Nip19, self).__init__()
@@ -295,24 +350,22 @@ class Nip19:
 class Nip42:
     def __init__(self):
         super(Nip42, self).__init__()
-        self.challenge:str = ""
 
-    def makeAuthEvent(self, relayURL:str="", kind:int=0):
+    def makeAuthEvent(self, relayURL:str="", kind:int=0) -> dict:
         return {
             'kind': kind,
             'created_at': int(time.time()),
             'tags':[
                 ['relay', relayURL],
-                ['challenge', self.challenge]
+                ['challenge', self.getChallenge()]
             ],
             'content':"",
         }
     
-    def getChallenge(self, event:list=[]):
-        if event[0] == "AUTH":
-            self.challenge = event[1]
+    def getChallenge(self, event:list=[]) -> str:
+        return  event[1]  if event[0] == "AUTH" else ""
 
-class Nip44:
+class Nip44(Bip0340):
     def __init__(self):
         super(Nip44, self).__init__()
     
@@ -360,14 +413,7 @@ class Nip44:
         return (chacha_key, chacha_nonce, hmac_key)
 
     def get_conversation_key(self, seckey:bytes, pubkey:str) -> bytes:
-        privkey = seckey
-        publickey = bytes.fromhex('02' + pubkey)
-
-        ecdh = ECDH(curve=SECP256k1)
-        ecdh.load_private_key_bytes(private_key=privkey)
-        ecdh.load_received_public_key_bytes(public_key_str=publickey)
-
-        shared_x = ecdh.generate_sharedsecret_bytes()
+        shared_x = self.getSharedSecret(seckey,bytes.fromhex('02' + pubkey))
 
         return HKDF(shared_x, 32, str('nip44-v2').encode('utf-8'), SHA256, 1)
 
@@ -422,7 +468,7 @@ class Nip44:
         
         chunk = 32 if next_power <= 256 else next_power // 8
 
-        return chunk * (floor((len - 1) // chunk) + 1) if unpadded_len > 32 else 32
+        return chunk * (floor((unpadded_len - 1) // chunk) + 1) if unpadded_len > 32 else 32
     
     def write_u16_be(self, num:int) -> bytes|None:
         if isinstance(num, int) and 0 <= num and num <= 65535:
@@ -453,6 +499,7 @@ class Nip44:
 
 class Nips(
     Nip04,
+    Nip06,
     Nip19,
     Nip42,
     Nip44,

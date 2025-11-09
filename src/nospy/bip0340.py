@@ -1,222 +1,397 @@
-from typing import Tuple, Optional, Any
 import hashlib
+import math
 import secrets
 
-# Set DEBUG to True to get a detailed debug output including
-# intermediate values during key generation, signing, and
-# verification. This is implemented via calls to the
-# debug_print_vars() function.
-#
-# If you want to print values on an individual basis, use
-# the pretty() function, e.g., print(pretty(foo)).
-DEBUG = False
+secp256k1_CURVE:tuple = (
+    0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f, #p
+    0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141, #n
+    1, #h
+    0, #a
+    7, #b
+    0x79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798, #Gx
+    0x483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8, #Gy
+)
+P, N, _b, Gx, Gy = (secp256k1_CURVE[0], secp256k1_CURVE[1], secp256k1_CURVE[4], secp256k1_CURVE[5], secp256k1_CURVE[6])
+L, L2 = (32, 64)
+lengths = (
+    L + 1,  #publicKey
+    L2 + 1, #publicKeyUncompressed
+    L2,     #signature
+    L + L // 2 #seed
+)
+G, I = ((Gx, Gy, 1), (0, 1, 0))
 
-p = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
-n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+W, scalarBits = (8, 256)
+pwindows, pwindowSize = (math.ceil(scalarBits / W) + 1, 2 ** (W - 1))
 
-# Points are tuples of X and Y coordinates and the point at infinity is
-# represented by the None keyword.
-G = (0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798, 0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8)
+class Bip0340:
+    def __init__(self):
+        super(Bip0340, self).__init__()
+        self.Gpows:list = None
 
-Point = Tuple[int, int]
+    def base(self) -> tuple[int, int, int]:
+        return G
+    
+    def zero(self) -> tuple[int, int, int]:
+        return I
 
-# This implementation can be sped up by storing the midstate after hashing
-# tag_hash instead of rehashing it all the time.
-def tagged_hash(tag: str, msg: bytes) -> bytes:
-    tag_hash = hashlib.sha256(tag.encode()).digest()
-    return hashlib.sha256(tag_hash + tag_hash + msg).digest()
-
-def is_infinite(P: Optional[Point]) -> bool:
-    return P is None
-
-def x(P: Point) -> int:
-    assert not is_infinite(P)
-    return P[0]
-
-def y(P: Point) -> int:
-    assert not is_infinite(P)
-    return P[1]
-
-def point_add(P1: Optional[Point], P2: Optional[Point]) -> Optional[Point]:
-    if P1 is None:
-        return P2
-    if P2 is None:
-        return P1
-    if (x(P1) == x(P2)) and (y(P1) != y(P2)):
+    def arange(self, n:int, min:int, max:int) -> int|None:
+        if all([isinstance(n, int), min <= n, n < max]): return n
         return None
-    if P1 == P2:
-        lam = (3 * x(P1) * x(P1) * pow(2 * y(P1), p - 2, p)) % p
-    else:
-        lam = ((y(P2) - y(P1)) * pow(x(P2) - x(P1), p - 2, p)) % p
-    x3 = (lam * lam - x(P1) - x(P2)) % p
-    return (x3, (lam * (x(P1) - x3) - y(P1)) % p)
+    
+    def invert(self, num:int, md:int) -> int|None:
+        if num == 0 or md <= 0: return None
+        a, b, x, y, u, v = (self.M(num, md), md, 0, 1, 1, 0)
+        while a != 0:
+            q, r = (b // a, b % a)
+            m, n = (x - u * q, y - v * q)
+            b, a, x , y, u, v = (a, r, u, v, m, n)
 
-def point_mul(P: Optional[Point], n: int) -> Optional[Point]:
-    R = None
-    for i in range(256):
-        if (n >> i) & 1:
-            R = point_add(R, P)
-        P = point_add(P, P)
-    return R
+        return self.M(x, md) if b == 1 else None
+    
+    def M(self, a:int, b:int=P) -> int:
+        return a % b
+    
+    def modN(self, a:int) -> int:
+        return a % N
 
-def bytes_from_int(x: int) -> bytes:
-    return x.to_bytes(32, byteorder="big")
+    def koblitz(self, x:int) -> int|None:
+        return self.M(self.M(x * x) * x + _b)
+    
+    def FpIsValid(self, n:int) -> int|None:
+        return self.arange(n, 0, P)
+    
+    def FpIsValidNot0(self, n:int) -> int|None:
+        return self.arange(n, 1, P)
+    
+    def FnIsValidNot0(self, n:int) -> int|None:
+        return self.arange(n, 1, N)
+    
+    def isEven(self, y:int) -> bool:
+        return (y & 1) == 0
+    
+    def getPrefix(self, y:int) -> bytes:
+        return b'\x02' if self.isEven(y) else b'\x03' 
 
-def bytes_from_point(P: Point) -> bytes:
-    return bytes_from_int(x(P))
+    def lift_x(self, x:int) -> int|None:
+        if self.FpIsValidNot0(x) is None: return None
+        c = self.koblitz(x)
+        if c is None: return None
 
-def xor_bytes(b0: bytes, b1: bytes) -> bytes:
-    return bytes(x ^ y for (x, y) in zip(b0, b1))
+        r = 1
+        (num, e) = (c, (P+1)//4)
+        while e > 0:
+            if e & 1: r = (r * num) % P
+            num = (num * num) % P
+            e >>= 1
+        
+        return r if self.M(r * r) == c else None
+    
+    def curve(self) -> tuple[int, ...]:
+        return secp256k1_CURVE
 
-def lift_x(x: int) -> Optional[Point]:
-    if x >= p:
-        return None
-    y_sq = (pow(x, 3, p) + 7) % p
-    y = pow(y_sq, (p + 1) // 4, p)
-    if pow(y, 2, p) != y_sq:
-        return None
-    return (x, y if y & 1 == 0 else p-y)
+    def fromAffine(self, ap:tuple[int, int]) -> tuple[int, int, int]:
+        x, y = ap
+        return  I if x == 0 and y == 0 else (x, y, 1)
+    
+    def fromBytes(self, data:bytes) -> tuple[int, int, int]|tuple[None, None, None]:
+        if not isinstance(data, bytes): return (None, None, None)
 
-def int_from_bytes(b: bytes) -> int:
-    return int.from_bytes(b, byteorder="big")
+        p = None
+        comp, uncomp, _, _ = lengths
+        length:int = len(data)
+        head:bytes = data[0]
+        tail:bytes = data[1:]
+        x:int = int.from_bytes(tail[0:L])
 
-def hash_sha256(b: bytes) -> bytes:
-    return hashlib.sha256(b).digest()
+        if length == comp and (head == 0x02 or head == 0x03):
+            y = self.lift_x(x)
+            if y is None: return (None, None, None)
+            evenY, evenH = (self.isEven(y), self.isEven(head))
+            if evenH != evenY: y = self.M(-y)
+            p = (x, y, 1)
+        
+        if length == uncomp and head == 0x04:
+            p = (x, int.from_bytes(tail[L:L2]), 1)
+        
+        return p if p is not None else (None, None, None)
+    
+    def fromHex(self, hex:str) -> tuple[int, int, int]|tuple[None, None, None]:
+        try:
+            return self.fromBytes(bytes.fromhex(hex))
+        except:
+            return (None, None, None)
+    
+    def getx(self, point:tuple[int, int, int]) -> int:
+        return self.toAffine(point)[0]
+    
+    def gety(self, point:tuple[int, int, int]) -> int:
+        return self.toAffine(point)[1]
 
-def has_even_y(P: Point) -> bool:
-    assert not is_infinite(P)
-    return y(P) % 2 == 0
+    def equals(self, point1:tuple[int, int, int], point2:tuple[int, int, int]) -> bool:
+        x1, y1, z1 = point1
+        x2, y2, z2 = point2
+        
+        x1z2, x2z1 = (self.M(x1 * z2), self.M(x2 * z1))
+        y1z2, y2z1 = (self.M(y1 * z2), self.M(y2 * z1))
 
-def pubkey_gen(seckey: bytes) -> bytes:
-    d0 = int_from_bytes(seckey)
-    if not (1 <= d0 <= n - 1):
-        raise ValueError('The secret key must be an integer in the range 1..n-1.')
-    P = point_mul(G, d0)
-    assert P is not None
-    return bytes_from_point(P)
+        return x1z2 == x2z1 and y1z2 == y2z1
+    
+    def is0(self, point:tuple[int, int, int]) -> bool:
+        return self.equals(point, I)
+    
+    def negate(self, point:tuple[int, int, int]) -> tuple[int, int, int]:
+        return (point[0], self.M(-point[1]), point[2])
 
-def schnorr_sign(msg: bytes, seckey: bytes, aux_rand: bytes=secrets.token_bytes(32)) -> bytes:
-    d0 = int_from_bytes(seckey)
-    if not (1 <= d0 <= n - 1):
-        raise ValueError('The secret key must be an integer in the range 1..n-1.')
-    if len(aux_rand) != 32:
-        raise ValueError('aux_rand must be 32 bytes instead of %i.' % len(aux_rand))
-    P = point_mul(G, d0)
-    assert P is not None
-    d = d0 if has_even_y(P) else n - d0
-    t = xor_bytes(bytes_from_int(d), tagged_hash("BIP0340/aux", aux_rand))
-    k0 = int_from_bytes(tagged_hash("BIP0340/nonce", t + bytes_from_point(P) + msg)) % n
-    if k0 == 0:
-        raise RuntimeError('Failure. This happens only with negligible probability.')
-    R = point_mul(G, k0)
-    assert R is not None
-    k = n - k0 if not has_even_y(R) else k0
-    e = int_from_bytes(tagged_hash("BIP0340/challenge", bytes_from_point(R) + bytes_from_point(P) + msg)) % n
-    sig = bytes_from_point(R) + bytes_from_int((k + e * d) % n)
-    debug_print_vars()
-    if not schnorr_verify(msg, bytes_from_point(P), sig):
-        raise RuntimeError('The created signature does not pass verification.')
-    return sig
+    def double(self, point:tuple[int, int, int]) -> tuple[int, int, int]|tuple[None, None, None]:
+        return self.add(point, point)
 
-def schnorr_verify(msg: bytes, pubkey: bytes, sig: bytes) -> bool:
-    if len(pubkey) != 32:
-        raise ValueError('The public key must be a 32-byte array.')
-    if len(sig) != 64:
-        raise ValueError('The signature must be a 64-byte array.')
-    P = lift_x(int_from_bytes(pubkey))
-    r = int_from_bytes(sig[0:32])
-    s = int_from_bytes(sig[32:64])
-    if (P is None) or (r >= p) or (s >= n):
-        debug_print_vars()
-        return False
-    e = int_from_bytes(tagged_hash("BIP0340/challenge", sig[0:32] + pubkey + msg)) % n
-    R = point_add(point_mul(G, s), point_mul(P, n - e))
-    if (R is None) or (not has_even_y(R)) or (x(R) != r):
-        debug_print_vars()
-        return False
-    debug_print_vars()
-    return True
+    def add(self, point1:tuple[int, int, int], point2:tuple[int, int, int]) -> tuple[int, int, int]|tuple[None, None, None]:
+        if None in point1 or None in point2: return (None, None, None)
 
-#
-# The following code is only used to verify the test vectors.
-#
-import csv
-import os
-import sys
+        x1, y1, z1 = point1
+        x2, y2, z2 = point2
+        x3, y3, z3 = (0, 0, 0)
+        a = 0
+        b = _b
+        b3 = self.M(b * 3)
 
-def test_vectors() -> bool:
-    all_passed = True
-    with open(os.path.join(sys.path[0], 'test-vectors.csv'), newline='') as csvfile:
-        reader = csv.reader(csvfile)
-        reader.__next__()
-        for row in reader:
-            (index, seckey_hex, pubkey_hex, aux_rand_hex, msg_hex, sig_hex, result_str, comment) = row
-            pubkey = bytes.fromhex(pubkey_hex)
-            msg = bytes.fromhex(msg_hex)
-            sig = bytes.fromhex(sig_hex)
-            result = result_str == 'TRUE'
-            print('\nTest vector', ('#' + index).rjust(3, ' ') + ':')
-            if seckey_hex != '':
-                seckey = bytes.fromhex(seckey_hex)
-                pubkey_actual = pubkey_gen(seckey)
-                if pubkey != pubkey_actual:
-                    print(' * Failed key generation.')
-                    print('   Expected key:', pubkey.hex().upper())
-                    print('     Actual key:', pubkey_actual.hex().upper())
-                    all_passed = False
-                aux_rand = bytes.fromhex(aux_rand_hex)
-                try:
-                    sig_actual = schnorr_sign(msg, seckey, aux_rand)
-                    if sig == sig_actual:
-                        print(' * Passed signing test.')
-                    else:
-                        print(' * Failed signing test.')
-                        print('   Expected signature:', sig.hex().upper())
-                        print('     Actual signature:', sig_actual.hex().upper())
-                        all_passed = False
-                except RuntimeError as e:
-                    print(' * Signing test raised exception:', e)
-                    all_passed = False
-            result_actual = schnorr_verify(msg, pubkey, sig)
-            if result == result_actual:
-                print(' * Passed verification test.')
+        t0, t1, t2, t3 = (self.M(x1 * x2), self.M(y1 * y2), self.M(z1 * z2), self.M(x1 + y1))
+        t4 = self.M(x2 + y2)
+        t3, t4 = (self.M(t3 * t4), self.M(t0 + t1))
+        t3, t4 = (self.M(t3 - t4), self.M(x1 + z1))
+        t5 = self.M(x2 + z2)
+        t4, t5 = (self.M(t4 * t5), self.M(t0 + t2))
+        t4, t5 = (self.M(t4 - t5), self.M(y1 + z1))
+        x3 = self.M(y2 + z2)
+        t5, x3 = (self.M(t5 * x3), self.M(t1 + t2))
+        t5, z3 = (self.M(t5 - x3), self.M(a * t4))
+        x3 = self.M(b3 * t2)
+        z3 = self.M(x3 + z3)
+        x3 = self.M(t1 - z3)
+        z3 = self.M(t1 + z3)
+        y3 = self.M(x3 * z3)
+        t1 = self.M(t0 + t0)
+        t1, t2, t4 = (self.M(t1 + t0), self.M(a * t2), self.M(b3 * t4))
+        t1 = self.M(t1 + t2)
+        t2 = self.M(t0 - t2)
+        t2 = self.M(a * t2)
+        t4 = self.M(t4 + t2)
+        t0 = self.M(t1 * t4)
+        y3 = self.M(y3 + t0)
+        t0 = self.M(t5 * t4)
+        x3 = self.M(t3 * x3)
+        x3 = self.M(x3 - t0)
+        t0, z3 = (self.M(t3 * t1), self.M(t5 * z3))
+        z3 = self.M(z3 + t0)
+
+        return (x3, y3, z3)
+    
+    def subtract(self, point1:tuple[int, int, int], point2:tuple[int, int, int]) -> tuple[int, int, int]|tuple[None, None, None]:
+        return self.add(point1, self.negate(point2))
+    
+    def multiply(self, point:tuple[int, int, int], n:int, safe:bool=True) -> tuple[int, int, int]|tuple[None, None, None]:
+        if not safe and n == 0: return I
+        if self.FnIsValidNot0(n) is None: return (None, None, None)
+        if n == 1: return point
+        if self.equals(point, G): return self.wNAF(n)[0]
+        
+        p, f, d = (I, G, point)
+        while n > 0:
+            if n & 1: p = self.add(p, d) 
+            elif safe: f = self.add(f, d)
+
+            d = self.double(d)
+            n >>= 1
+        
+        return p
+
+    def multiplyUnsafe(self, point:tuple[int, int, int], scalar:int) -> tuple[int, int, int]|tuple[None, None, None]:
+        return self.multiply(point, scalar, False)
+
+    def toAffine(self, point:tuple[int, int, int]) -> tuple[int, int]|tuple[None, None]:
+        x, y, z = point
+        if self.equals(point, I): return (0, 0)
+        if z == 1: return (x, y)
+        iz = self.invert(z, P)
+        if iz is None: return (None, None)
+        if self.M(z * iz) != 1: return (None, None)
+        
+        return (self.M(x * iz), self.M(y * iz))
+
+    def isValidity(self, point:tuple[int, int, int]) -> bool:
+        x, y = self.toAffine(point)
+        if x is None or y is None: return False
+        if self.FpIsValidNot0(x) is None or self.FpIsValidNot0(y) is None: return False
+
+        return True if self.M(y * y) == self.koblitz(x) else False
+    
+    def toBytes(self, point:tuple[int, int, int], isCompressed:bool=True) -> bytes|None:
+        if not self.isValidity(point): return None
+        
+        x, y = self.toAffine(point)
+        if x is None or y is None: return None
+
+        x32b, y32b = (int.to_bytes(x, 32), int.to_bytes(y, 32))
+
+        return self.getPrefix(y) + x32b  if isCompressed else b'\x04' + x32b + y32b
+    
+    def toHex(self, point:tuple[int, int, int], isCompressed:bool=True) -> str|None:
+        try:
+            return self.toBytes(point, isCompressed).hex()
+        except:
+            return None
+
+    def precompute(self) -> list[tuple[int, int, int]]:
+        points:list = []
+        p:tuple[int, int, int] = G
+        b:tuple[int, int, int] = p
+
+        for _ in range(pwindows):
+            b = p
+            points.append(b)
+            for _ in range(1, pwindowSize):
+                b = self.add(b, p)
+                points.append(b)
+            p = self.double(b)
+        
+        return points
+
+    def ctneg(self, cnd:bool, p:tuple[int, int, int]) -> tuple[int, int, int]:
+        return self.negate(p) if cnd else p
+
+    def wNAF(self, n:int) -> tuple[tuple[int, int, int], tuple[int, int, int]]|tuple[None, None]:
+        if self.Gpows is None: self.Gpows = self.precompute()
+        comp:list = self.Gpows
+        p, f = (I, G)
+        pow_2_w:int = 2 ** W
+        maxNum:int = pow_2_w
+        mask:int = pow_2_w - 1
+        shiftBy:int = W
+
+        for w in range(pwindows):
+            wbits:int = n & mask
+            n >>= shiftBy
+            if wbits > pwindowSize:
+                wbits -= maxNum
+                n += 1
+            
+            off:int = w * pwindowSize
+            offF:int = off
+            offP:int = off + abs(wbits) - 1
+            isEven:bool = w % 2 != 0
+            isNeg:bool = wbits < 0
+            if wbits == 0:
+                f = self.add(f, self.ctneg(isEven, comp[offF]))
             else:
-                print(' * Failed verification test.')
-                print('   Expected verification result:', result)
-                print('     Actual verification result:', result_actual)
-                if comment:
-                    print('   Comment:', comment)
-                all_passed = False
-    print()
-    if all_passed:
-        print('All test vectors passed.')
-    else:
-        print('Some test vectors failed.')
-    return all_passed
+                p = self.add(p, self.ctneg(isNeg, comp[offP]))
+        
+        return (p, f) if n == 0 else (None, None)
+    
+    def taggedHash(self, tag: str, messages: list[bytes]) -> bytes:
+        tag_hash = hashlib.sha256(('BIP0340/' + tag).encode()).digest()
+        return hashlib.sha256(tag_hash + tag_hash + bytes.join(b'', messages)).digest()
 
-#
-# The following code is only used for debugging
-#
-import inspect
+    def highS(self, n:int) -> bool:
+        return n > N >> 1
+    
+    def doubleScalarMulUns(self, R:tuple[int, int, int], u1:int, u2:int) -> tuple[int, int, int]|tuple[None, None, None]:
+        num = self.add(self.multiply(G, u1, False), self.multiply(R, u2, False))
+        return num if self.isValidity(num) else (None, None, None)
 
-def pretty(v: Any) -> Any:
-    if isinstance(v, bytes):
-        return '0x' + v.hex()
-    if isinstance(v, int):
-        return pretty(bytes_from_int(v))
-    if isinstance(v, tuple):
-        return tuple(map(pretty, v))
-    return v
+    def secretKeyToScalar(self, seckey:bytes) -> int|None:
+        if not isinstance(seckey, bytes): return None
+        return self.arange(int.from_bytes(seckey), 1, N)
+    
+    def isValidSecretKey(self, seckey:bytes) -> bool:
+        if not isinstance(seckey, bytes) or len(seckey) != L: return False
+        if self.arange(int.from_bytes(seckey), 1, N) is None: return False
+        
+        return True
 
-def debug_print_vars() -> None:
-    if DEBUG:
-        current_frame = inspect.currentframe()
-        assert current_frame is not None
-        frame = current_frame.f_back
-        assert frame is not None
-        print('   Variables in function ', frame.f_code.co_name, ' at line ', frame.f_lineno, ':', sep='')
-        for var_name, var_val in frame.f_locals.items():
-            print('   ' + var_name.rjust(11, ' '), '==', pretty(var_val))
+    def randomSecretKey(self, seed:bytes=secrets.token_bytes(lengths[3])) -> bytes|None:
+        if not isinstance(seed, bytes): return None
+        if len(seed) < lengths[3] or len(seed) > 1024: return None
+        num:int = self.M(int.from_bytes(seed), N - 1)
+        
+        return  int.to_bytes(num, 32)
 
-if __name__ == '__main__':
-    test_vectors()
+    def getPublicKey(self, privKey:bytes, isCompressed:bool = True) -> bytes|None:
+        return self.toBytes(self.multiply(G, self.secretKeyToScalar(privKey)), isCompressed)
+    
+    def getSharedSecret(self, seckeyA:bytes, pubkeyB:bytes, isCompressed:bool = True) -> bytes|None:
+        return self.toBytes(self.multiply(self.fromBytes(pubkeyB), self.secretKeyToScalar(seckeyA)), isCompressed)
+    
+    def extpubSchnorr(self, privkey:bytes) -> tuple[int, bytes]|tuple[None, None]:
+        d_:int = self.secretKeyToScalar(privkey)
+        p:tuple[int, int, int] = self.multiply(G, d_)
+        if not self.isValidity(p): return (None, None)
+        x, y = self.toAffine(p)
+        d = d_ if self.isEven(y) else self.modN(-d_)
+        px = int.to_bytes(x, 32)
+
+        return (d, px)
+
+    def prepSigSchnorr(self, message:bytes, seckey:bytes, auxRand:bytes) -> tuple[bytes, bytes, int, bytes]|tuple[None, None, None, None]:
+        if not isinstance(message, bytes) or len(auxRand) != L: return (None, None, None, None)
+        
+        d, px = self.extpubSchnorr(seckey)
+        if px is None or d is None: return (None, None, None, None)
+
+        return (message, px, d, auxRand)
+    
+    def extractK(self, rand:bytes) -> tuple[int, bytes]|tuple[None, None]:
+        k_:int = self.modN(int.from_bytes(rand))
+        if k_ == 0: return (None, None)
+        d, px = self.extpubSchnorr(int.to_bytes(k_, 32))
+
+        return (d, px)
+    
+    def createSigSchnorr(self, k:int, px:bytes, e:int, d:int) -> bytes:
+        return px + int.to_bytes(self.M(k + e * d, N), 32)
+
+    def challenge(self, messages:list[bytes]) -> int:
+        return self.modN(int.from_bytes(self.taggedHash('challenge', messages)))
+
+    def verifySchnorr(self, message:bytes, pubkey:bytes, signature:bytes) -> bool:
+        if not all([isinstance(message, bytes), isinstance(pubkey, bytes), isinstance(signature, bytes)]): return False
+        
+        msg:bytes = message
+        pub:bytes = pubkey if len(pubkey) == L else None
+        sig:bytes = signature if len(signature) == L2 else None
+        if pub is None or sig is None: return False
+
+        x:int = int.from_bytes(pub)
+        y:int = self.lift_x(x)
+        y_:int = y if self.isEven(y) else self.M(-y)
+
+        P_:tuple[int, int, int] = (x, y_, 1)
+        if not self.isValidity(P_): return False
+        px:bytes = int.to_bytes(self.toAffine(P_)[0], 32)
+        r:int = int.from_bytes(sig[0:L])
+        if self.arange(r, 1, P) is None: return False
+        s:int = int.from_bytes(sig[L:L2])
+        if self.arange(s, 1, N) is None: return False
+        i:bytes = int.to_bytes(r, 32) + px + msg
+
+        e:int = self.challenge([i])
+        r_x, r_y = self.toAffine(self.doubleScalarMulUns(P_, s, self.modN(-e)))
+        if not self.isEven(r_y) or r_x != r: return False
+
+        return True
+
+    def signSchnorr(self, message:bytes, seckey:bytes, auxRand:bytes=secrets.token_bytes(L)) -> bytes|None:
+        m, px, d, a = self.prepSigSchnorr(message, seckey, auxRand)
+        if a is None: return None
+        aux:bytes = self.taggedHash('aux', [a])
+        t:bytes = int.to_bytes(d ^ int.from_bytes(aux), 32)
+        rand:bytes = self.taggedHash('nonce', [t, px, m])
+        k, rx = self.extractK(rand)
+        if rx is None or k is None: return None
+        e = self.challenge([rx, px, m])
+        sig = self.createSigSchnorr(k, rx, e, d)
+
+        if not self.verifySchnorr(m, px, sig): return None
+
+        return sig
+

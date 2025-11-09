@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nospy"
-version = "0.0.3"
+version = "0.0.4"
 description = "Pythonで作ったNostr用ライブラリです。"
 requires-python = ">=3.12"
 authors = [{ name = "Tanaka Takashi" }]
@@ -17,7 +17,6 @@ dependencies = [
     "aiosignal==1.4.0",
     "attrs==25.4.0",
     "bech32==1.2.0",
-    "ecdsa==0.19.1",
     "frozenlist==1.8.0",
     "idna==3.11",
     "multidict==6.7.0",
