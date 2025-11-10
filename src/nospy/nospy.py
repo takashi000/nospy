@@ -1,5 +1,3 @@
-import secrets
-
 from .relay import Relay
 
 class Nostr(Relay):

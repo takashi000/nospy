@@ -3,9 +3,9 @@ import re
 import json
 import time
 
-from .bip0340 import Bip0340
+from .nips import Nips
 
-class Event(Bip0340):
+class Event(Nips):
     def __init__(self):
         super(Event, self).__init__()
 
@@ -60,7 +60,7 @@ class Event(Bip0340):
         return hashlib.sha256(self.serializeEvent().encode('utf-8')).hexdigest()
     
     def finalizeEvent(self) -> dict:
-        self.pubkey = self.generatePublicKey(self.skey) # defined nospy.py
+        self.pubkey = self.getPublicKey(self.skey)[1:].hex()
         self.id = self.getEventHash()
         self.sig = self.signSchnorr(bytes.fromhex(self.getEventHash()), self.skey).hex()
         self.verifiedSymbol = True

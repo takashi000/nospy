@@ -4,11 +4,9 @@ import ssl
 import uuid
 from aiohttp import ClientSession, ClientTimeout, ClientWebSocketResponse, ClientWSTimeout, WSMsgType, web
 
-from .filter import Filter
 from .message import Message
-from .nips import Nips
 
-class Relay(Filter, Message, Nips):
+class Relay(Message):
     def __init__(
             self, url:str="",
             ping:bool=False,

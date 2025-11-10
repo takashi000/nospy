@@ -1,6 +1,8 @@
 import json
 
-class Message:
+from .filter import Filter
+
+class Message(Filter):
     def __init__(self):
         super(Message, self).__init__()
     
