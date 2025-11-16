@@ -1,3 +1,4 @@
+from aiohttp import ClientSession
 from Crypto.Cipher import AES, ChaCha20
 from Crypto.Protocol.KDF import HKDF
 from Crypto.Hash import SHA256
@@ -8,6 +9,7 @@ import bech32
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import struct
 import time
@@ -50,6 +52,57 @@ class Nip04(Bip0340):
 
     def getNormalizedX(self, key:bytes) -> bytes:
         return key[1:33]
+
+class Nip05:
+    def __init__(self):
+        super(Nip05, self).__init__()
+        # ルートパスを含める
+        self.nip05_match = re.compile(r"^(?:([\w.+-]+)@)?([\w_-]+(\.[\w_-]+)+)(/.*)?$")
+    
+    async def searchDomain(self, domain:str, query:str="") -> dict|None:
+        url = f"https://{domain}/.well-known/nostr.json?name={query}"
+        async with ClientSession() as session:
+            async with session.get(url, allow_redirects=False) as respose:
+                    try:
+                        json_response = await respose.json()
+                        return json_response["names"]
+                    except:
+                        return None
+        
+    async def queryProfile(self, event:dict) -> dict|None:
+        nip05:tuple = self.parseNip05(event)
+        if any((nip05[0] is None, nip05[1] is None, nip05[2] is None)): return None
+
+        route = nip05[2] if nip05[3] is None else nip05[2] + nip05[3]
+        query = nip05[1]
+        url = f"https://{route}/.well-known/nostr.json?name={query}"
+
+        async with ClientSession() as session:
+            async with session.get(url, allow_redirects=False) as respose:
+                    try:
+                        json_response = await respose.json()
+                        pubkey:str = json_response["names"].get(query)
+                        relays:dict = json_response.get("relays")
+                        relay_list:list = relays.get(pubkey,[]) if relays is not None else []
+                        return {pubkey: relay_list} if pubkey else None
+                    except:
+                        return None
+
+    def parseNip05(self, event:dict) -> tuple[str, str, str, str]|tuple[None, None, None, None]:
+        if not isinstance(event, dict): return (None, None, None, None)
+
+        kind, pubkey, content  = (event.get("kind", -1), event.get("pubkey"), event.get("content"))
+        if kind != 0: return (None, None, None, None)
+        try:
+            content:dict = json.loads(content)
+            nip05:str = content.get("nip05")
+            if pubkey is None or nip05 is None: return (None, None, None, None)
+            match_value = self.nip05_match.match(nip05)
+            name, domain, _, routepath = match_value.groups() if match_value is not None else (None, None, None, None)
+        except:
+            return (None, None, None, None)
+
+        return (pubkey, name, domain, routepath)
 
 class Nip06(Bip0032, Bip0039):
     def __init__(self):
@@ -561,6 +614,7 @@ class Nip44(Bip0340):
 
 class Nips(
     Nip04,
+    Nip05,
     Nip06,
     Nip13,
     Nip19,

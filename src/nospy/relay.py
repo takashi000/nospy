@@ -1,8 +1,9 @@
 import asyncio
 import json
+import re
 import ssl
 import uuid
-from aiohttp import ClientSession, ClientTimeout, ClientWebSocketResponse, ClientWSTimeout, WSMsgType, web
+from aiohttp import ClientSession, ClientTimeout, ClientError, ClientWebSocketResponse, ClientWSTimeout, WSMsgType, web
 
 from .message import Message
 
@@ -160,7 +161,7 @@ class Relay(Message):
                         print(f"unknown:{msg.data}")
                 break
             self.reconnect_count = 0
-        except TimeoutError:
+        except (TimeoutError, ClientError):
             await self.reconnect(self.url)
             await self.send(message)
         except Exception as e:
@@ -180,7 +181,7 @@ class Relay(Message):
                         print(f"error:{msg.data}")
                     case _:
                         print(f"unknown:{msg.data}")
-        except TimeoutError:
+        except (TimeoutError, ClientError):
             await self.reconnect(self.url)
         except Exception as e:
             raise ValueError(e)
@@ -188,13 +189,16 @@ class Relay(Message):
         return self.receive_data
      
     async def close(self, ids:list[str]=None) -> None:
-        if ids:
-            for id in ids:
-                await self.send(self.closeMessage(id))
-            self.subscribe_ids = list(filter(lambda x: x not in ids, self.subscribe_ids))
-        else:
-            for id in self.subscribe_ids:
-                await self.send(self.closeMessage(id))
+        try:
+            if ids:
+                for id in ids:
+                    await self.send(self.closeMessage(id))
+                self.subscribe_ids = list(filter(lambda x: x not in ids, self.subscribe_ids))
+            else:
+                for id in self.subscribe_ids:
+                    await self.send(self.closeMessage(id))
+                self.subscribe_ids = []
+        except:
             self.subscribe_ids = []
 
         if self.subscribe_ids == []:
@@ -249,16 +253,78 @@ class Relay(Message):
     async def pingpong(self) -> None:
         await self.websocket.send_str("PING")
 
-    def choice(self, subscribe_id:list[str]=None, msg_type:str="", num=-1):
+    def choice(
+            self,
+            subscribe_id:list[str]=None,
+            msg_type:str="",
+            num=-1,
+            event:dict=None,
+            message:str=None,
+            ok_bool:bool=None,
+            count:int=None,
+            approximate:bool=None
+        ) -> list:
         # subscribe_id: None すべてのIDを取得
-        # msg_type: EVENT, EOSE, NOTICE, OK, COUNT, AUTH
+        # msg_type: EVENT, EOSE, NOTICE, OK, COUNT
         # num: -1 すべて, 0 空読み, 1以上 numの指定数だけ取得
+        # event: EVENT
+        # message: CLOSED, NOTICE, OK
+        # ok_bool: OK
+        # count: COUNT
+        # approximate: COUNT
 
-        choiced_data = []
+        choiced_message:list = []
         if subscribe_id:
-            choiced_data = list(filter(lambda x: x[0] == msg_type and x[1] in subscribe_id, self.receive_data))
+            choiced_message = list(filter(lambda x: x[0] == msg_type and x[1] in subscribe_id, self.receive_data))
         else:
-            choiced_data = list(filter(lambda x: x[0] == msg_type, self.receive_data))
+            choiced_message = list(filter(lambda x: x[0] == msg_type, self.receive_data))
         
-        return choiced_data[0:num] if num >= 0 else choiced_data[0:]
+        return_data:list = choiced_message
+
+        choiced_data:list = []
+        match(msg_type):
+            case "EVENT":
+                # id, kind, tags, content, created_at, pubkey, sig
+                if isinstance(event, dict):
+                    choice_iterator = choiced_message
+                    choiced_data = list(filter(lambda x: isinstance(x[2], dict) and
+                                               all(
+                                                    (k in x[2] and 
+                                                    (re.match(v, str(x[2][k])) if isinstance(v, str) else 
+                                                    (any([e for e in s if i < len(sublist) and re.match(e, str(sublist[i]))] for s in v for i, sublist in enumerate(x[2][k])) if isinstance(v, list)
+                                                     else (x[2].get(k) == v)))
+                                                    ) for k, v in event.items()
+                                                )
+                                            , choice_iterator))
+                    return_data = choiced_data
+            case "NOTICE":
+                if  isinstance(message, str):
+                    choiced_data = list(filter(lambda x: isinstance(x[1], str) and re.match(message, str(x[1])), choiced_message))
+                    return_data = choiced_data
+            case "CLOSED":
+                if isinstance(message, str):
+                    choiced_data = list(filter(lambda x: isinstance(x[2], str) and re.match(message, x[2]), choiced_message))
+                    return_data = choiced_data
+            case "OK":
+                if isinstance(ok_bool, bool) or isinstance(message, str):
+                    choiced_data = list(filter(lambda x: 
+                                            any(
+                                                (isinstance(ok_bool, bool) and isinstance(x[2], bool) and x[2] == ok_bool or 
+                                                    isinstance(message, str) and isinstance(x[3], str) and re.match(message, x[3]))
+                                                )
+                                                , choiced_message))
+                    return_data = choiced_data
+            case "COUNT":
+                if isinstance(count, int) or isinstance(approximate, bool):
+                    choiced_data = list(filter(lambda x: isinstance(x[2], dict) and 
+                                            any(
+                                                (isinstance(count, int) and x[2].get("count") == count or isinstance(approximate, bool) and x[2].get("approximate") == approximate)
+                                            )
+                                            , choiced_message))
+                    return_data = choiced_data
+            case _:
+                pass
+
+        del choiced_message
+        return return_data[0:num] if num >= 0 else return_data[0:]
     

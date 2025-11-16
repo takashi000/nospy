@@ -6,8 +6,8 @@ class Message(Filter):
     def __init__(self):
         super(Message, self).__init__()
     
-    def eventMessage(self, event:dict) -> str:
-        return f'["EVENT",{json.dumps(event)}]'
+    def eventMessage(self, event:dict, id:str=None) -> str:
+        return f'["EVENT",{json.dumps(event)}]' if id is None else f'["EVENT","{id}",{json.dumps(event)}]'
     
     def closeMessage(self, id:str="") -> str:
         return f'["CLOSE","{id}"]'
@@ -15,9 +15,13 @@ class Message(Filter):
     def authMessage(self, event:dict) -> str:
         return f'["AUTH",{json.dumps(event)}]'
     
-    def countMessage(self, id:str="") -> str:
-        subscribe_filters = self.strFilters()
-        return f'["COUNT","{id}",{subscribe_filters}]' if subscribe_filters != "" else f'["COUNT","{id}",{{}}]'
+    def countMessage(self, id:str="", count:int=None, approximate:bool=None) -> str:
+        if count is None:
+            subscribe_filters = self.strFilters()
+            return f'["COUNT","{id}",{subscribe_filters}]' if subscribe_filters != "" else f'["COUNT","{id}",{{}}]'
+        else:
+            count_value:dict = {"count":count} if approximate is None else {"count":count,"approximate":approximate}
+            return f'["COUNT","{id}",{json.dumps(count_value)}]'
     
     def reqMessage(self, id:str="") -> str:
         subscribe_filters = self.strFilters()
