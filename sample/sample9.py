@@ -11,7 +11,8 @@ from nospy import Nostr
 
 async def main():
     async with Nostr(
-        url="wss://yabu.me",
+        skey="<your secret key>",
+        url="<relay url>",
     ) as nostr:
         nostr.addFilters(kinds=[1])
         await nostr.subscribe(id="59223")

@@ -15,7 +15,7 @@ Nip05使用例
 async def main():
     async with Nostr(
         skey="<your secret key>",
-        url="wss://yabu.me",
+        url="<relay url>",
     ) as nostr:
         # イベントから該当するユーザのpubkeyとリレー一覧を取得
         nip05 = await nostr.queryProfile(event={"kind":0, "pubkey":"<pubkey>", "content":json.dumps({"nip05":"<name>@<domain>"})})
