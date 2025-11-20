@@ -1,5 +1,5 @@
 from aiohttp import ClientSession
-from Crypto.Cipher import AES, ChaCha20
+from Crypto.Cipher import AES, ChaCha20, ChaCha20_Poly1305
 from Crypto.Protocol.KDF import HKDF
 from Crypto.Hash import SHA256
 from Crypto.Util.Padding import pad, unpad
@@ -12,7 +12,9 @@ import json
 import re
 import secrets
 import struct
+import sys
 import time
+import unicodedata
 
 from .bip0032 import Bip0032
 from .bip0039 import Bip0039
@@ -611,6 +613,69 @@ class Nip44(Bip0340):
             diff |= a[i] ^ b[i]
         
         return True if diff == 0 else False 
+    
+class Nip49:
+    def __init__(self):
+        super(Nip49, self).__init__()
+
+        self.scrypt_max:int = 340282366920938463463374607431768211456
+
+    def secret_encrypt(self, seckey:bytes, password:str, logn:int=16, ksb:int=0x02) -> str|None:
+        if ksb not in(0x00, 0x01, 0x02): return None
+
+        salt:bytes = secrets.token_bytes(16)
+        
+        n:int = 2 ** logn
+        if any([n <=1, n >= self.scrypt_max]): return None
+
+        maxmem:int = ((n * 9 * 128) + 1 * 32)
+        try:
+            key:bytes = hashlib.scrypt(password=unicodedata.normalize('NFKC', password).encode('utf-8'), salt=salt, n=n, r=8, p=1, maxmem=maxmem, dklen=32)
+        except:
+            return None
+        
+        nonce:bytes = secrets.token_bytes(24)
+        aad:bytes = bytes([ksb])
+        
+        xc2p1 = ChaCha20_Poly1305.new(key=key, nonce=nonce)
+        xc2p1.update(aad)
+        ciphertext = xc2p1.encrypt(seckey)
+        
+        b = bytes([0x02]) + bytes([logn]) + salt + nonce + aad + ciphertext
+        
+        return bech32.bech32_encode('ncryptsec', bech32.convertbits(list(b), 8, 5, True))
+
+    def secret_decrypt(self, ncryptsec:str, password:str) -> bytes|None:
+        if not isinstance(ncryptsec, str): return None
+        prefix, data = bech32.bech32_decode(ncryptsec)
+        if prefix != 'ncryptsec': return None
+        
+        b:bytes = bytes(bech32.convertbits(data, 5, 8, False))
+
+        version:int = b[0]
+        if version != 0x02: return None
+
+        logn:int = b[1]
+        n:int = 2 ** logn
+        if any([n <=1, n >= self.scrypt_max]): return None
+
+        salt:bytes = b[2:18]
+        nonce:bytes = b[18:42]
+        ksb:int = b[42]
+        aad:bytes = bytes([ksb])
+        ciphertext:bytes = b[43:75]
+
+        maxmem:int = ((n * 9 * 128) + 1 * 32)
+        try:
+            key:bytes = hashlib.scrypt(password=unicodedata.normalize('NFKC', password).encode('utf-8'), salt=salt, n=n, r=8, p=1, maxmem=maxmem, dklen=32)
+        except:
+            return None
+        
+        xc2p1 = ChaCha20_Poly1305.new(key=key, nonce=nonce)
+        xc2p1.update(aad)
+        seckey:bytes = xc2p1.decrypt(ciphertext)
+
+        return seckey
 
 class Nips(
     Nip04,
@@ -620,6 +685,7 @@ class Nips(
     Nip19,
     Nip42,
     Nip44,
+    Nip49,
 ):
     def __init__(self):
         super(Nips, self).__init__()

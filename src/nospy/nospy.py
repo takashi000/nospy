@@ -4,7 +4,7 @@ class Nostr(Relay):
     def __init__(
             self, 
             skey:bytes|str=None, 
-            pkey:bytes|str=None, 
+            secret_password:str="",
             url:str="", 
             ping:bool=False, 
             reconnect_on:bool=True,
@@ -34,29 +34,41 @@ class Nostr(Relay):
             client_ssl_on=client_ssl_on,
         )
 
-        self.skey = self.generateSecretKey(skey)
+        self.secret_password = secret_password
+        self.skey = self.generateSecretKey(skey, self.secret_password)
         self.pubkey = self.generatePublicKey(self.skey)
         self.url = url
         self.server_on = server_on
 
-    def generateSecretKey(self, sk:bytes|str = None) -> bytes:
-        if type(sk) is str:
-            sk = self.bech32_decode(sk)[1]
-            if not sk:
+    def generateSecretKey(self, skey:bytes|str = None, password:str="") -> bytes:
+        if isinstance(skey, str):
+            sk = self.secret_decrypt(skey, password)
+            sk = self.bech32_decode(skey)[1] if sk is None else sk
+            if sk is None:
                 try:
-                    sk = bytes.fromhex(sk)
+                    sk = bytes.fromhex(skey)
                 except:
                     sk = None
+        elif isinstance(skey, bytes):
+            sk = skey if len(skey) == 32 else None
+        else:
+            sk = None
+
         return self.randomSecretKey() if sk is None else sk
     
-    def generatePublicKey(self, sk:bytes|str = None) -> str:
-        if type(sk) is str:
-            sk = self.bech32_decode(sk)[1]
-            if not sk:
+    def generatePublicKey(self, skey:bytes|str = None) -> str:
+        if isinstance(skey, str):
+            sk = self.bech32_decode(skey)[1]
+            if sk is None:
                 try:
-                    sk = bytes.fromhex(sk)
+                    sk = bytes.fromhex(skey)
                 except:
                     sk = None
+        elif isinstance(skey, bytes):
+            sk = skey if len(skey) == 32 else None
+        else:
+            sk = None
+            
         return self.getPublicKey(sk if sk is not None else self.skey)[1:].hex()
 
     async def __aenter__(self):
