@@ -262,7 +262,10 @@ class Relay(Message):
             message:str=None,
             ok_bool:bool=None,
             count:int=None,
-            approximate:bool=None
+            approximate:bool=None,
+            event_sort:bool=False,
+            event_sort_reverse:bool=False,
+            event_sort_key:str="created_at",
         ) -> list:
         # subscribe_id: None すべてのIDを取得
         # msg_type: EVENT, EOSE, NOTICE, OK, COUNT
@@ -272,6 +275,9 @@ class Relay(Message):
         # ok_bool: OK
         # count: COUNT
         # approximate: COUNT
+        # event_sort: msg_typeがEVENTのときにTrueならばソートした結果を出力
+        # event_sort_reverse: msg_typeがEVENTかつevent_sortがTrueのときにTrueならば昇順でソートする
+        # event_sort_key: msg_typeがEVENTのときに対象のソートキーとなるeventに含まれるのキーをに指定する
 
         choiced_message:list = []
         if subscribe_id:
@@ -296,6 +302,9 @@ class Relay(Message):
                                                     ) for k, v in event.items()
                                                 )
                                             , choice_iterator))
+                    if event_sort:
+                        sort_key:str = event_sort_key if isinstance(event_sort_key, str) else "created_at"
+                        choiced_data.sort(key=lambda x: x[2].get(sort_key,""), reverse=event_sort_reverse)
                     return_data = choiced_data
             case "NOTICE":
                 if  isinstance(message, str):

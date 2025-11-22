@@ -27,7 +27,10 @@ async def main():
                     [r'^e$'],
                     [r'^p$'],
                 ]
-            }
+            },
+            event_sort=True, # EVENTのソートを有効化
+            event_sort_reverse=True, # 降順ソート
+            event_sort_key="created_at" # created_atをキーにしてソート 
         )
         # 結果をファイルに出力
         with open('./data.json', 'w', encoding='utf-8') as f:
