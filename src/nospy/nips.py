@@ -12,7 +12,6 @@ import json
 import re
 import secrets
 import struct
-import sys
 import time
 import unicodedata
 
