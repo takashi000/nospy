@@ -41,9 +41,9 @@ class Event(Nips):
                     return False
         return True
 
-    def serializeEvent(self) -> str:
+    def serializeEvent(self, pubkey:str=None) -> str:
         if not self.validateEvent() : raise ValueError("can't serialize event with wrong or missing properties")
-        event = self.unsignedEvent()
+        event = self.unsignedEvent(pubkey)
         return json.dumps(
             [0, 
              event['pubkey'], 
@@ -56,24 +56,30 @@ class Event(Nips):
             separators=(',', ':')
         )
 
-    def getEventHash(self) -> str:
-        return hashlib.sha256(self.serializeEvent().encode('utf-8')).hexdigest()
+    def getEventHash(self, pubkey:str=None) -> str:
+        return hashlib.sha256(self.serializeEvent(pubkey).encode('utf-8')).hexdigest()
     
-    def finalizeEvent(self) -> dict:
-        self.pubkey = self.getPublicKey(self.skey)[1:].hex()
-        self.id = self.getEventHash()
-        self.sig = self.signSchnorr(bytes.fromhex(self.getEventHash()), self.skey).hex()
+    def finalizeEvent(self, pubkey:str=None) -> dict:
+        self.pubkey = self.getPublicKey(self.skey)[1:].hex() if pubkey is None else pubkey
+        self.id = self.getEventHash(self.pubkey)
+        self.sig = self.signSchnorr(bytes.fromhex(self.getEventHash(self.pubkey)), self.skey).hex()
         self.verifiedSymbol = True
         return self.eventTemplate()
     
-    def verifyEvent(self) -> bool:
+    def verifyEvent(self, pubkey:str=None) -> bool:
         if self.verifiedSymbol : self.verifiedSymbol
-        hash = self.getEventHash()
+        use_pubkey:str = self.pubkey if pubkey is None else pubkey
+        hash = self.getEventHash(use_pubkey)
+        
         if hash != self.id:
             self.verifiedSymbol = False
             return False
         try:
-            valid = self.verifySchnorr(bytes.fromhex(hash), bytes.fromhex(self.pubkey), bytes.fromhex(self.sig))
+            valid = self.verifySchnorr(
+                bytes.fromhex(hash),
+                bytes.fromhex(use_pubkey),
+                bytes.fromhex(self.sig)
+            )
             self.verifiedSymbol = valid
             return valid
         except:
@@ -89,13 +95,13 @@ class Event(Nips):
         }
         return event
 
-    def unsignedEvent(self) -> dict:
+    def unsignedEvent(self, pubkey:str=None) -> dict:
         event = {
             "kind":self.kind,
             "tags":self.tags,
             "content":self.content,
             "created_at":self.created_at,
-            "pubkey": self.pubkey,
+            "pubkey": self.pubkey if pubkey is None else pubkey,
         }
         return event
     
@@ -105,19 +111,20 @@ class Event(Nips):
             tags:list[list[str]]=None,
             content:str="",
             created_at:int=None,
+            pubkey:str=None,
             finalize:int=True,
             verify:bool=False,
             validate:bool=False,
         ) -> dict:
-        self.kind = kind if kind else 1
-        self.tags = tags if tags else []
-        self.content = content if content else ""
-        self.created_at = created_at if created_at else int(time.time())
+        self.kind = kind if kind is not None else 1
+        self.tags = tags if tags is not None else []
+        self.content = content if isinstance(content, str) else ""
+        self.created_at = created_at if created_at is not None else int(time.time())
         
-        event = self.finalizeEvent() if finalize else self.unsignedEvent()
+        event = self.finalizeEvent(pubkey) if finalize else self.unsignedEvent()
         
         if verify:
-            if not self.verifyEvent():
+            if not self.verifyEvent(pubkey):
                 raise ValueError("invalid Event: verifyEvent Error")
         
         if validate:

@@ -309,8 +309,9 @@ class Bip0340:
         
         return True
 
-    def randomSecretKey(self, seed:bytes=secrets.token_bytes(lengths[3])) -> bytes|None:
-        if not isinstance(seed, bytes): return None
+    def randomSecretKey(self, seed:bytes=None) -> bytes|None:
+        if not isinstance(seed, bytes): seed = secrets.token_bytes(lengths[3])
+
         if len(seed) < lengths[3] or len(seed) > 1024: return None
         num:int = self.M(int.from_bytes(seed), N - 1)
         
@@ -373,14 +374,15 @@ class Bip0340:
         s:int = int.from_bytes(sig[L:L2])
         if self.arange(s, 1, N) is None: return False
         i:bytes = int.to_bytes(r, 32) + px + msg
-
+        
         e:int = self.challenge([i])
         r_x, r_y = self.toAffine(self.doubleScalarMulUns(P_, s, self.modN(-e)))
         if not self.isEven(r_y) or r_x != r: return False
-
+        
         return True
 
-    def signSchnorr(self, message:bytes, seckey:bytes, auxRand:bytes=secrets.token_bytes(L)) -> bytes|None:
+    def signSchnorr(self, message:bytes, seckey:bytes, auxRand:bytes=None) -> bytes|None:
+        if not isinstance(auxRand, bytes): auxRand = secrets.token_bytes(L)
         m, px, d, a = self.prepSigSchnorr(message, seckey, auxRand)
         if a is None: return None
         aux:bytes = self.taggedHash('aux', [a])
