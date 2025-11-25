@@ -11,7 +11,7 @@ NIP57で受け取り側ウォレットから支払先インボイスを取得す
 
 async def main():
     async with Nostr(
-        url="wss://yabu.me",
+        url="<relay url>",
     ) as nostr:
         id = secrets.token_hex(16)
 
