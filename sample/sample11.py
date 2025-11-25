@@ -26,8 +26,9 @@ async def main():
         if len(data) > 0:
             metadata_kind0 = data[0][2]
 
-            res = await nostr.getZapEndpoint(metadata_kind0)
             # 成功時の戻り値は(callback url, minSendable, maxSendable, nostrPubkey)
+            res = await nostr.getZapEndpoint(metadata_kind0)
+            
             param = nostr.paramProfileZap(nostr.pubkey, 1000, ["<zap receipt relay>"], "test")
             zr = nostr.makeZapRequestEvent(param)
             if nostr.validateZapRequestEvent(zr):
