@@ -3,6 +3,7 @@ import json
 import re
 import ssl
 import uuid
+from urllib.parse import quote
 from aiohttp import ClientSession, ClientTimeout, ClientError, ClientWebSocketResponse, ClientWSTimeout, WSMsgType, web
 
 from .message import Message
@@ -235,16 +236,7 @@ class Relay(Message):
         await self.send(self.reqMessage(id))
 
     async def publish(self) -> None:
-        event = {
-            "kind": self.kind,
-            "tags": self.tags,
-            "content": self.content,
-            "created_at": self.created_at,
-            "pubkey": self.pubkey,
-            "id": self.id,
-            "sig": self.sig
-        }
-        await self.send(self.eventMessage(event))
+        await self.send(self.eventMessage(self.singedEvent()))
 
     async def subscribe(self, id:str="") -> None:
         self.subscribe_ids.append(id)
@@ -252,7 +244,23 @@ class Relay(Message):
 
     async def pingpong(self) -> None:
         await self.websocket.send_str("PING")
-
+    
+    async def zap(self, url:str, amount:int) -> str|None:
+        # NIP-57
+        try:
+            params = {
+                "amount": amount,
+                "nostr": quote(json.dumps(self.singedEvent()))
+            }
+            async with ClientSession() as session:
+                async with session.get(url, params=params) as respose:
+                        try:
+                            json_response = await respose.json()
+                            return json_response
+                        except:
+                            return None
+        except:
+            return None
     def choice(
             self,
             subscribe_id:list[str]=None,

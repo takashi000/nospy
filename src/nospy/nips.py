@@ -676,6 +676,207 @@ class Nip49:
 
         return seckey
 
+class Nip57:
+    def __init__(self):
+        super(Nip57, self).__init__()
+    
+    async def getZapEndpoint(self, event:dict) -> tuple[str, int, int, str]|None:
+        try:
+            lnurl:str = ""
+            lud06, lud16 = self.parseNip57(event)
+            if lud16:
+                name, domain = lud16.split('@')
+                lnurl = f"https://{domain}/.well-known/lnurlp/{name}"
+            elif lud06:
+                hrp, data = bech32.bech32_decode(lud06)
+                if hrp.lower() != 'LNURL': return None
+                lnurl = bytes(bech32.convertbits(data, 5, 8, False)).decode('utf-8')
+            else:
+                return None
+            
+            return await self.requestLNURL(lnurl)
+        except:
+            return None
+
+    def makeZapRequestEvent(self, params:dict) -> dict|None:
+        if not isinstance(params, dict): return None
+        
+        try:
+            zr:dict = {
+                "kind": 9734,
+                "created_at": int(time.time()),
+                "content":  params.get("comment",""),
+                "tags":[
+                    ["p", params["pubkey"] if "pubkey" in params else params["event"]["pubkey"]],
+                    ["amount", str(params["amount"])],
+                    ["relays", *[k for k in params["relays"]]],
+                ]
+            }
+
+            if "event" in params:
+                zr["tags"].append(["e", params["event"]["id"]])
+                if self.isReplaceableKind(params["event"]["kind"]):
+                    zr["tags"].append(["a", f"{params["event"]["kind"]}:{params["evnet"]["pubkey"]}:"])
+                elif self.isAddressableKind(params["event"]["kind"]):
+                    d:tuple = next(((t, v) for t, v in params["event"]["tags"] if t == "d" and v), None)
+                    if d is None: return None
+                    zr["tags"].append(["a", f"{params["event"]["kind"]:{params["event"]["pubkey"]:{d[1]}}}"])
+                zr["tags"].append(["k", str(params["kind"])])
+            
+            return zr
+        except:
+            return None
+    
+    def validateZapRequestEvent(self, zr:dict) -> bool:
+        try:
+            p:tuple = next(((t, v) for t, v in zr["tags"] if t == "p" and v), None)
+            if p is None: return False
+            if re.match(r'^[a-f0-9]{64}$', p[1]) is None: return False
+
+            e:tuple = next(((t,v) for t, v in zr["tags" ] if t == "e" and v), None)
+            if e is not None and re.match(r'^[a-f0-9]{64}$', e[1]) is None: return False
+
+            relays:tuple = next(((t, v) for t, v in zr["tags"] if t == "relays" and v), None)
+            if relays is None: return False
+
+            return True
+        except:
+            return False
+
+    def makeZapReceiptEvent(self, zr:dict, bolt11:str, paidat:int, preimage:str=None) -> dict|None:
+        try:
+            if not all([
+                isinstance(zr, dict),
+                isinstance(bolt11, str),
+                isinstance(paidat, int)
+            ]): return None
+            
+            tags:list[list[str]] = list(filter(lambda x: any((x[0] == "e", x[0] == "p", x[0] == "a")) ,zr["tags"]))
+            tags_must:list[list[str]] = [["P", zr["pubkey"]], ["bolt11", bolt11], ["description", json.dumps(zr)]]
+            tags_append:list[list[str]] = tags_must.append(["preimage", preimage]) if preimage is not None else tags_must
+            tags.append([tags in tags_append])
+            
+            zap:dict = {
+                "kind": 9735,
+                "created_at": int(time.time()),
+                "content": "",
+                "tags": tags
+            }
+
+            return zap
+        except:
+            return None
+
+    def getSatoshisAmount(self, bold11:str) -> int:
+        if isinstance(bold11, str) and len(bold11) < 50: return 0
+        
+        try:
+            hrp:str = bold11[0: bold11[0:50].rindex("1")]
+            if not hrp.startswith("lnbc"): return 0
+            
+            amount:str = hrp[len("lnbc")]
+            if len(amount) < 1: return 0
+
+            c:str = amount[len(amount) - 1]
+            numlastindex:int = len(amount) - 1 if c.isalpha() else len(amount)
+            num:int = int(amount[0:numlastindex])
+
+            satoshi_amount:int = 0
+            match c:
+                case "m":
+                    satoshi_amount = num * 100000
+                case "u":
+                    satoshi_amount = num * 100
+                case "n":
+                    satoshi_amount = num // 10
+                case "p":
+                    satoshi_amount = num // 10000
+                case _:
+                    satoshi_amount = num * 100000000
+            
+            return satoshi_amount
+        except:
+            return 0
+    
+    def paramProfileZap(self, pubkey:str, amount:int, relays:list[str], comment:str=None) -> dict|None:
+        try:
+            if not all([
+                isinstance(pubkey, str),
+                isinstance(amount, int),
+                isinstance(relays, list),
+            ]): return None
+            if not all((isinstance(relay, str) for relay in relays)): return None
+            params = {
+                "pubkey": pubkey,
+                "amount": amount,
+                "comment": comment if isinstance(comment, str) else "",
+                "relays": relays
+            }
+
+            return params
+        except:
+            return None
+    
+    def paramEventZap(self, event:dict, amount:int, relays:list[str], comment:str=None) -> dict|None:
+        try:
+            if not all([
+                isinstance(event, dict),
+                isinstance(amount, int),
+                isinstance(relays, list),
+            ]): return None
+            if not all((isinstance(relay, str) for relay in relays)): return None
+            params = {
+                "event": event,
+                "amount": amount,
+                "comment": comment if comment is not None else "",
+                "relays": relays
+            }
+
+            return params
+        except:
+            return None
+
+    async def requestLNURL(self, lnurl:str) -> tuple[str, int, int, str]|None:
+        async with ClientSession() as session:
+            async with session.get(lnurl) as respose:
+                    try:
+                        json_response = await respose.json()
+                        callback, minSendable, maxSendable, allowsNostr, nostrPubkey = (
+                            json_response.get("callback"),
+                            json_response.get("minSendable"), 
+                            json_response.get("maxSendable"),
+                            json_response.get("allowsNostr"), 
+                            json_response.get("nostrPubkey"),
+                        )
+                        return (callback, minSendable, maxSendable, nostrPubkey) if allowsNostr else None
+                    except:
+                        return None         
+
+    def parseNip57(self, event:dict) -> tuple[str, str]|tuple[None, None]:
+        if not isinstance(event, dict): return (None, None)
+
+        kind, pubkey, content  = (event.get("kind", -1), event.get("pubkey"), event.get("content"))
+        if kind != 0: return (None)
+        
+        lud06:str = None
+        lud16:str = None
+        try:
+            content:dict = json.loads(content)
+            lud06, lud16 = (content.get("lud06"), content.get("lud16"))
+            if pubkey is None or (lud06 is None and lud16 is None): return (None, None)
+            
+            return (lud06, lud16)
+        except:
+            return (None, None)
+    
+    def isReplaceableKind(self, kind:int) -> bool:
+        # implement on kinds.py
+        return True
+    
+    def isAddressableKind(self, kind:int) -> bool:
+        # implement on kinds.py
+        return True
+
 class Nips(
     Nip04,
     Nip05,
@@ -685,6 +886,7 @@ class Nips(
     Nip42,
     Nip44,
     Nip49,
+    Nip57,
 ):
     def __init__(self):
         super(Nips, self).__init__()

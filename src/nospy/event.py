@@ -25,14 +25,21 @@ class Event(Nips):
     def VerifiedEvent(self):
         self.verifiedSymbol = True
     
-    def validateEvent(self):
-        if type(self.kind) is not int: return False
-        if type(self.content) is not str: return False
-        if type(self.created_at) is not int: return False
-        if type(self.pubkey) is not str: return False
-        if self.pubkey_match.match(self.pubkey) is False: return False
-        if not isinstance(self.tags, list):
-            return False
+    def validateEvent(self) -> bool:
+        kind:int = self.kind
+        content:str = self.content
+        created_at:int = self.created_at
+        pubkey:str = self.pubkey
+        tags:list[list[str]] = self.tags
+        
+        if not all((
+            isinstance(kind, int),
+            isinstance(content, str),
+            isinstance(created_at, int),
+            isinstance(pubkey, str),
+            isinstance(tags, list)
+        )): return False
+        if self.pubkey_match.match(pubkey) is False: return False
         for sublist in self.tags:
             if not isinstance(sublist, list):
                 return False
@@ -41,9 +48,9 @@ class Event(Nips):
                     return False
         return True
 
-    def serializeEvent(self, pubkey:str=None) -> str:
+    def serializeEvent(self) -> str:
         if not self.validateEvent() : raise ValueError("can't serialize event with wrong or missing properties")
-        event = self.unsignedEvent(pubkey)
+        event = self.unsignedEvent()
         return json.dumps(
             [0, 
              event['pubkey'], 
@@ -56,35 +63,39 @@ class Event(Nips):
             separators=(',', ':')
         )
 
-    def getEventHash(self, pubkey:str=None) -> str:
-        return hashlib.sha256(self.serializeEvent(pubkey).encode('utf-8')).hexdigest()
+    def getEventHash(self) -> str:
+        return hashlib.sha256(self.serializeEvent().encode('utf-8')).hexdigest()
     
-    def finalizeEvent(self, pubkey:str=None) -> dict:
-        self.pubkey = self.getPublicKey(self.skey)[1:].hex() if pubkey is None else pubkey
-        self.id = self.getEventHash(self.pubkey)
-        self.sig = self.signSchnorr(bytes.fromhex(self.getEventHash(self.pubkey)), self.skey).hex()
+    def finalizeEvent(self) -> dict:
+        self.pubkey = self.getPublicKey(self.skey)[1:].hex()
+        self.id = self.getEventHash()
+        self.sig = self.signSchnorr(bytes.fromhex(self.getEventHash()), self.skey).hex()
         self.verifiedSymbol = True
         return self.eventTemplate()
     
-    def verifyEvent(self, pubkey:str=None) -> bool:
+    def verifyEvent(self) -> bool:
         if self.verifiedSymbol : self.verifiedSymbol
-        use_pubkey:str = self.pubkey if pubkey is None else pubkey
-        hash = self.getEventHash(use_pubkey)
+
+        id:str = self.id
+        pubkey:str = self.pubkey
+        sig:str = self.sig
+        hash:str = self.getEventHash()
         
-        if hash != self.id:
+        if hash != id:
             self.verifiedSymbol = False
             return False
         try:
             valid = self.verifySchnorr(
                 bytes.fromhex(hash),
-                bytes.fromhex(use_pubkey),
-                bytes.fromhex(self.sig)
+                bytes.fromhex(pubkey),
+                bytes.fromhex(sig)
             )
             self.verifiedSymbol = valid
+
             return valid
         except:
             self.verifiedSymbol = False
-        return False
+            return False
 
     def eventTemplate(self) -> dict:
         event = {
@@ -93,25 +104,39 @@ class Event(Nips):
             "content":self.content,
             "created_at":self.created_at,
         }
+
         return event
 
-    def unsignedEvent(self, pubkey:str=None) -> dict:
+    def unsignedEvent(self) -> dict:
         event = {
             "kind":self.kind,
             "tags":self.tags,
             "content":self.content,
             "created_at":self.created_at,
-            "pubkey": self.pubkey if pubkey is None else pubkey,
+            "pubkey": self.pubkey,
         }
+
         return event
     
+    def singedEvent(self) ->dict:
+        event = {
+            "kind": self.kind,
+            "tags": self.tags,
+            "content": self.content,
+            "created_at": self.created_at,
+            "pubkey": self.pubkey,
+            "id": self.id,
+            "sig": self.sig
+        }
+
+        return event
+
     def addEvent(
             self,
             kind:int=None,
             tags:list[list[str]]=None,
             content:str="",
             created_at:int=None,
-            pubkey:str=None,
             finalize:int=True,
             verify:bool=False,
             validate:bool=False,
@@ -121,10 +146,10 @@ class Event(Nips):
         self.content = content if isinstance(content, str) else ""
         self.created_at = created_at if created_at is not None else int(time.time())
         
-        event = self.finalizeEvent(pubkey) if finalize else self.unsignedEvent()
+        event = self.finalizeEvent() if finalize else self.unsignedEvent()
         
         if verify:
-            if not self.verifyEvent(pubkey):
+            if not self.verifyEvent():
                 raise ValueError("invalid Event: verifyEvent Error")
         
         if validate:
