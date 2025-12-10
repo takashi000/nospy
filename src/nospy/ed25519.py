@@ -199,11 +199,12 @@ class Ed25519:
         return (self.M(x * iz), self.M(y * iz))
 
     def isValidity(self, point:tuple[int, int, int, int]) -> bool:
+        if None in point: return False
         a, d, p = (_a, _d, point)
         if self.is0(p): return False
 
         x, y, z, t = p
-        x2, y2, z2 = (self.M(x *x), self.M(y * y), self.M(z * z))
+        x2, y2, z2 = (self.M(x * x), self.M(y * y), self.M(z * z))
         
         z4:int = self.M(z2 * z2)
         ax2:int = self.M(x2 * a)
@@ -333,7 +334,7 @@ class Ed25519:
         if (self.M(x) & 1) == 1: x = self.M(-x)
 
         return (useroot1 or useroot2, x)
-    
+
     # type ExtK = { head: Bytes; prefix: Bytes; scalar: bigint; point: Point; pointBytes: Bytes };
     def hash2extK(self, hashed:bytes) -> tuple[bytes, bytes, int, tuple[int, int, int, int], bytes]:
         head:bytearray = bytearray(hashed[0:L])
