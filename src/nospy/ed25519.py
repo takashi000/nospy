@@ -405,10 +405,107 @@ class Ed25519:
             return False
 
         return isverified
-    
+
     def randomSecretKey(self, seed:bytes=None) -> bytes:
         return secrets.token_bytes(L) if not isinstance(seed, bytes) else seed
     
+    def keygen(self, seed:bytes=None) -> tuple[bytes, bytes]:
+        secret_key:bytes = self.randomSecretKey(seed)
+        public_key:bytes = self.getPublicKey(secret_key)
+
+        return (secret_key, public_key)
+
+minScalar:int = 2 ** 254
+maxAdded:int = 8 * 2 ** 251 - 1
+maxScalar:int = minScalar + maxAdded + 1
+class X25519(Ed25519):
+    def __init__(self):
+        super().__init__()
+
+    def adjustScalarBytes(self, sb:bytes) -> bytes:
+        data:bytearray = bytearray(sb)
+        data[0] &= 248
+        data[31] &= 127
+        data[31] |= 64
+
+        return data
+
+    def powPminus2(self, x:int) -> int:
+        p58, b2 = self.pow_2_252_3(x)
+
+        return self.M(self.pow2(p58, 3) * b2)
+
+    def encodeU(self, u:int) -> bytes:
+        return int.to_bytes(self.M(u), 32, 'little')
+
+    def decodeU(self, u:bytes) -> int:
+        data:bytearray = bytearray(u)
+        data[31] &= 127
+
+        return self.M(int.from_bytes(data, 'little'))
+
+    def cswap(self, swap:int, x2:int, x3:int) -> tuple[int, int]:
+        dummy:int = self.M(swap * (x2 - x3))
+        
+        return (self.M(x2 - dummy), self.M(x3 + dummy)) 
+
+    def montgomeryLadder(self, u:int, scalar:int) -> int|None:
+        if self.arange(u, 0, P) is None: return None
+        if self.arange(scalar, minScalar, maxScalar) is None: return None
+
+        k, x1, x2, z2, x3, z3, swap = (scalar, u, 1, 0, u, 1, 0)
+        t:int = 254 # 255 - 1
+        a24:int = 121665
+        while t >= 0:
+            kt:int = (k >> t) & 1
+            swap ^= kt
+            x2, x3 = self.cswap(swap, x2, x3)
+            z2, z3 = self.cswap(swap, z2, z3)
+            swap = kt
+
+            A:int = x2 + z2
+            AA:int = self.M(A * A)
+            B:int = x2 - z2
+            BB:int = self.M(B * B)
+            E:int = AA - BB
+            C:int = x3 + z3
+            D:int = x3 - z3
+            DA:int = self.M(D * A)
+            CB:int = self.M(C * B)
+            dacb:int = DA + CB
+            da_cb:int = DA - CB
+            x3:int = self.M(dacb * dacb)
+            z3:int = self.M(x1 * self.M(da_cb * da_cb))
+            x2:int = self.M(AA * BB)
+            z2:int = self.M(E * (AA + self.M(a24 * E)))
+
+            t -= 1
+        
+        x2, x3 = self.cswap(swap, x2, x3)
+        z2, z3 = self.cswap(swap, z2, z3)
+        z2 = self.powPminus2(z2)
+
+        return self.M(x2 * z2)
+
+    def decodeScalar(self, scalar:bytes) -> int | None:
+        if not isinstance(scalar, bytes) or len(scalar) != 32: return None
+        return int.from_bytes(self.adjustScalarBytes(scalar), 'little')
+
+    def scalarMult(self, scalar:bytes, u:bytes) -> bytes|None:
+        pu:int = self.montgomeryLadder(self.decodeU(u), self.decodeScalar(scalar))
+        if pu == 0: return None
+
+        return self.encodeU(pu)
+    
+    def scalarMultBase(self, scalar:bytes) -> bytes:
+        return self.scalarMult(scalar, self.encodeU(9))
+
+    def getSharedSecret(self, seckeyA:bytes, pubkeyB:bytes) -> bytes:
+        return self.scalarMult(seckeyA, pubkeyB)
+
+    def getPublicKey(self, priv:bytes) -> bytes:
+        return self.scalarMultBase(priv)
+
     def keygen(self, seed:bytes=None) -> tuple[bytes, bytes]:
         secret_key:bytes = self.randomSecretKey(seed)
         public_key:bytes = self.getPublicKey(secret_key)
