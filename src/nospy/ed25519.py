@@ -418,9 +418,16 @@ class Ed25519:
 minScalar:int = 2 ** 254
 maxAdded:int = 8 * 2 ** 251 - 1
 maxScalar:int = minScalar + maxAdded + 1
-class X25519(Ed25519):
+class X25519:
     def __init__(self):
         super().__init__()
+
+    def arange(self, n:int, min:int, max:int) -> int|None:
+        if all([isinstance(n, int), min <= n, n < max]): return n
+        return None
+    
+    def M(self, a:int, b:int=P) -> int:
+        return a % b
 
     def adjustScalarBytes(self, sb:bytes) -> bytes:
         data:bytearray = bytearray(sb)
@@ -429,6 +436,30 @@ class X25519(Ed25519):
         data[31] |= 64
 
         return data
+    
+    def pow2(self, x:int, power:int) -> int:
+        r:int = x
+        for _ in range(power):
+            r *= r
+            r %= P
+
+        return r
+
+    def pow_2_252_3(self, x:int) -> tuple[int, int]:
+        x2:int = (x * x) % P
+        b2:int = (x2 * x) % P
+        b4:int = (self.pow2(b2, 2) * b2) % P
+        b5:int = (self.pow2(b4, 1) * x) % P
+        b10:int = (self.pow2(b5, 5) * b5) % P
+        b20:int = (self.pow2(b10, 10) * b10) % P
+        b40:int = (self.pow2(b20, 20) * b20) % P
+        b80:int = (self.pow2(b40, 40) * b40) % P
+        b160:int = (self.pow2(b80, 80) * b80) % P
+        b240:int = (self.pow2(b160, 80) * b80) % P
+        b250:int = (self.pow2(b240, 10) * b10) % P
+        pow_p_5_8:int = (self.pow2(b250, 2) * x) % P
+
+        return (pow_p_5_8, b2)
 
     def powPminus2(self, x:int) -> int:
         p58, b2 = self.pow_2_252_3(x)
@@ -505,6 +536,9 @@ class X25519(Ed25519):
 
     def getPublicKey(self, priv:bytes) -> bytes:
         return self.scalarMultBase(priv)
+
+    def randomSecretKey(self, seed:bytes=None) -> bytes:
+        return secrets.token_bytes(L) if not isinstance(seed, bytes) else seed
 
     def keygen(self, seed:bytes=None) -> tuple[bytes, bytes]:
         secret_key:bytes = self.randomSecretKey(seed)
